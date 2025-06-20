@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Oportunidade, OportunidadeFiltros, OportunidadeStatus } from '@/types/comercial';
-import { supabase, crmonefactory } from '@/lib/supabase/client';
+// import { supabase, crmonefactory } from '@/lib/supabase/client'; // Supabase client removed
 
 // Cache para armazenar resultados de requisiu00e7u00f5es anteriores
 interface CacheItem {
@@ -208,49 +208,39 @@ export function useOportunidades() {
         prev.map((opp) => (opp.id === id ? { ...opp, status } : opp))
       );
       
-      // Usar o cliente Supabase centralizado com o schema correto
-      try {
-        console.log('Atualizando status via cliente Supabase...');
-        const { data, error } = await crmonefactory
-          .from('oportunidades')
-          .update({
-            status: status,
-            data_atualizacao: new Date().toISOString()
-          })
-          .eq('id', id)
-          .select()
-          .single();
-          
-        if (error) {
-          console.error('Erro ao atualizar no Supabase:', error);
-          throw error;
-        }
-        
-        console.log('Atualização via cliente Supabase bem-sucedida:', data);
-        return data;
-      } catch (supabaseError) {
-        console.error('Falha no Supabase, tentando via API:', supabaseError);
-        
-        // Tentar pela API normal como fallback
-        const response = await fetch(`/api/comercial/oportunidades/${id}`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ status }),
-        });
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-          throw new Error(data.error || 'Erro ao atualizar status da oportunidade');
-        }
-        
-        console.log('Atualização via API bem-sucedida:', data);
-        return data;
+      // Otimistic update local
+      setOportunidades((prev) =>
+        prev.map((opp) => (opp.id === id ? { ...opp, status } : opp))
+      );
+
+      // Chamada para a API refatorada (que usa MySQL)
+      const response = await fetch(`/api/comercial/oportunidades/${id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        // Reverter a atualização otimista em caso de erro na API
+        setOportunidades((prev) =>
+          prev.map((opp) => (opp.id === id ? { ...opp, status: opp.status } : opp)) // Reverte para o status original
+        );
+        throw new Error(data.error || 'Erro ao atualizar status da oportunidade');
       }
+
+      console.log('Atualização de status via API (MySQL backend) bem-sucedida:', data);
+      // Opcional: atualizar o estado local com os dados retornados pela API se forem diferentes/mais completos
+      // setOportunidades((prev) =>
+      //   prev.map((opp) => (opp.id === id ? data : opp))
+      // );
+      return data;
     } catch (err) {
       console.error('Erro ao atualizar status da oportunidade:', err);
+      // Considerar reverter o estado aqui também se a chamada fetch falhar completamente
       throw err;
     }
   }, []);

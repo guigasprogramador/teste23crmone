@@ -1,142 +1,73 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Oportunidade } from '@/types/comercial';
-import * as fs from 'fs';
-import * as path from 'path';
-import { supabase, crmonefactory } from "@/lib/supabase/client";
+import { getDbConnection } from '@/lib/mysql/client';
 
-// Path para o arquivo de "banco de dados"
-const dbPath = path.join(process.cwd(), 'data', 'oportunidades.json');
+// Helper para formatar uma única oportunidade do MySQL para o formato da aplicação
+// (Similar à função em ./route.ts, mas para um único objeto)
+function formatarOportunidadeDoMySQL(opp: any): Oportunidade | null {
+  if (!opp) return null;
 
-// Função para carregar os dados do arquivo
-async function carregarOportunidades(): Promise<Oportunidade[]> {
-  try {
-    // Garantir que o diretório existe
-    const dir = path.dirname(dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    
-    // Criar arquivo se não existir
-    if (!fs.existsSync(dbPath)) {
-      // Dados iniciais para o "banco de dados"
-      const oportunidadesIniciais: Oportunidade[] = [
-        {
-          id: "1",
-          titulo: "Sistema de Gestão Municipal",
-          cliente: "Prefeitura de São Paulo",
-          clienteId: "c1",
-          valor: "R$ 450.000,00",
-          responsavel: "Ana Silva",
-          responsavelId: "r1",
-          prazo: "30/06/2023",
-          status: "novo_lead",
-          dataCriacao: "2023-01-15T10:30:00Z",
-          dataAtualizacao: "2023-01-15T10:30:00Z",
-        },
-        {
-          id: "2",
-          titulo: "Plataforma de Educação Online",
-          cliente: "Secretaria de Educação",
-          clienteId: "c2",
-          valor: "R$ 280.000,00",
-          responsavel: "Carlos Oliveira",
-          responsavelId: "r2",
-          prazo: "15/07/2023",
-          status: "agendamento_reuniao",
-          dataCriacao: "2023-02-10T14:20:00Z",
-          dataAtualizacao: "2023-02-15T09:45:00Z",
-        },
-        {
-          id: "3",
-          titulo: "Modernização de Infraestrutura",
-          cliente: "Hospital Municipal",
-          clienteId: "c3",
-          valor: "R$ 620.000,00",
-          responsavel: "Ana Silva",
-          responsavelId: "r1",
-          prazo: "10/08/2023",
-          status: "levantamento_oportunidades",
-          dataCriacao: "2023-03-05T11:15:00Z",
-          dataAtualizacao: "2023-03-10T16:30:00Z",
-        },
-        {
-          id: "4",
-          titulo: "Sistema de Controle de Frotas",
-          cliente: "Departamento de Transportes",
-          clienteId: "c4",
-          valor: "R$ 180.000,00",
-          responsavel: "Pedro Santos",
-          responsavelId: "r3",
-          prazo: "05/06/2023",
-          status: "proposta_enviada",
-          dataCriacao: "2023-04-12T09:00:00Z",
-          dataAtualizacao: "2023-04-20T14:45:00Z",
-        },
-        {
-          id: "5",
-          titulo: "Portal de Transparência",
-          cliente: "Governo do Estado",
-          clienteId: "c5",
-          valor: "R$ 320.000,00",
-          responsavel: "Carlos Oliveira",
-          responsavelId: "r2",
-          prazo: "20/07/2023",
-          status: "negociacao",
-          dataCriacao: "2023-05-08T10:30:00Z",
-          dataAtualizacao: "2023-05-15T11:20:00Z",
-        },
-        {
-          id: "6",
-          titulo: "Aplicativo de Serviços Públicos",
-          cliente: "Prefeitura de Campinas",
-          clienteId: "c6",
-          valor: "R$ 250.000,00",
-          responsavel: "Pedro Santos",
-          responsavelId: "r3",
-          prazo: "15/06/2023",
-          status: "fechado_ganho",
-          dataCriacao: "2023-01-20T13:45:00Z",
-          dataAtualizacao: "2023-02-28T16:30:00Z",
-        },
-        {
-          id: "7",
-          titulo: "Sistema de Gestão Hospitalar",
-          cliente: "Hospital Regional",
-          clienteId: "c7",
-          valor: "R$ 380.000,00",
-          responsavel: "Maria Souza",
-          responsavelId: "r4",
-          prazo: "22/07/2023",
-          status: "fechado_perdido",
-          dataCriacao: "2023-03-15T09:30:00Z",
-          dataAtualizacao: "2023-04-10T14:20:00Z",
-        },
-      ];
-      
-      fs.writeFileSync(dbPath, JSON.stringify(oportunidadesIniciais, null, 2));
-      return oportunidadesIniciais;
-    }
-    
-    // Ler do arquivo
-    const data = fs.readFileSync(dbPath, 'utf8');
-    return JSON.parse(data);
-  } catch (error) {
-    console.error('Erro ao carregar oportunidades:', error);
-    return [];
+  let prazoFormatted = 'Não definido';
+  if (opp.prazo) {
+    const dataPrazo = new Date(opp.prazo);
+    const userTimezoneOffset = dataPrazo.getTimezoneOffset() * 60000;
+    prazoFormatted = new Date(dataPrazo.getTime() + userTimezoneOffset).toLocaleDateString('pt-BR');
   }
+
+  let dataReuniaoFormatted = '';
+  if (opp.data_reuniao) {
+    const dataReuniao = new Date(opp.data_reuniao);
+    const userTimezoneOffset = dataReuniao.getTimezoneOffset() * 60000;
+    dataReuniaoFormatted = new Date(dataReuniao.getTime() + userTimezoneOffset).toLocaleDateString('pt-BR');
+  }
+
+  return {
+    id: opp.id,
+    titulo: opp.titulo,
+    cliente: opp.cliente_nome || 'Cliente não especificado',
+    clienteId: opp.cliente_id,
+    valor: opp.valor ? `R$ ${Number(opp.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'A definir',
+    responsavel: opp.responsavel_nome || 'Não atribuído',
+    responsavelId: opp.responsavel_id,
+    prazo: prazoFormatted,
+    status: opp.status,
+    descricao: opp.oportunidade_descricao, // da view_oportunidades
+    dataCriacao: opp.data_criacao,
+    dataAtualizacao: opp.data_atualizacao,
+    tipo: opp.tipo,
+    tipoFaturamento: opp.tipo_faturamento,
+    dataReuniao: dataReuniaoFormatted,
+    horaReuniao: opp.hora_reuniao,
+    probabilidade: opp.probabilidade,
+    cnpj: opp.cliente_cnpj,
+    contatoNome: opp.contato_nome,
+    contatoTelefone: opp.contato_telefone,
+    contatoEmail: opp.contato_email,
+    segmento: opp.cliente_segmento,
+  };
 }
 
-// Função para salvar os dados no arquivo
-async function salvarOportunidades(oportunidades: Oportunidade[]): Promise<void> {
-  try {
-    const dir = path.dirname(dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(dbPath, JSON.stringify(oportunidades, null, 2));
-  } catch (error) {
-    console.error('Erro ao salvar oportunidades:', error);
+// Helper para converter string DD/MM/YYYY para YYYY-MM-DD
+function parseDateString(dateString: string | undefined | null): string | null {
+  if (!dateString || dateString === 'Não definido') return null;
+  const parts = dateString.split('/');
+  if (parts.length === 3) {
+    return `${parts[2]}-${parts[1]}-${parts[0]}`; // YYYY-MM-DD
   }
+   // Tentar parsear diretamente se já estiver em formato compatível ou ISO
+  const date = new Date(dateString);
+  if (!isNaN(date.getTime())) {
+    return date.toISOString().split('T')[0];
+  }
+  return null;
+}
+
+// Helper para converter valor monetário "R$ X.XXX,XX" para DECIMAL
+function parseCurrency(currencyString: string | undefined | null): number | null {
+  if (!currencyString || currencyString === 'A definir') return null;
+  const cleaned = currencyString.replace("R$", "").replace(/\./g, "").replace(",", ".").trim();
+  const value = parseFloat(cleaned);
+  return isNaN(value) ? null : value;
 }
 
 // GET - Obter uma oportunidade específica
@@ -144,29 +75,38 @@ export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let connection;
   try {
-    const oportunidades = await carregarOportunidades();
-    const id = await params.id;
-    console.log(`Buscando oportunidade com ID: ${id}`);
+    const { id } = params;
+    console.log(`GET /api/comercial/oportunidades/${id} - Buscando oportunidade com MySQL`);
     
-    const oportunidade = oportunidades.find((o) => o.id === id);
+    connection = await getDbConnection();
+    const [rows]: any = await connection.execute('SELECT * FROM view_oportunidades WHERE id = ?', [id]);
     
-    if (!oportunidade) {
-      console.log(`Oportunidade com ID ${id} não encontrada`);
-      return NextResponse.json(
-        { error: 'Oportunidade não encontrada' },
-        { status: 404 }
-      );
+    if (rows.length === 0) {
+      console.log(`Oportunidade com ID ${id} não encontrada no MySQL`);
+      return NextResponse.json({ error: 'Oportunidade não encontrada' }, { status: 404 });
     }
     
-    console.log(`Oportunidade encontrada: ${JSON.stringify(oportunidade)}`);
-    return NextResponse.json(oportunidade);
-  } catch (error) {
-    console.error('Erro ao buscar oportunidade:', error);
+    const oportunidadeFormatada = formatarOportunidadeDoMySQL(rows[0]);
+    console.log(`Oportunidade encontrada no MySQL: ${JSON.stringify(oportunidadeFormatada)}`);
+    return NextResponse.json(oportunidadeFormatada);
+
+  } catch (error: any) {
+    console.error('Erro ao buscar oportunidade (MySQL):', error);
     return NextResponse.json(
       { error: 'Erro ao buscar oportunidade', details: error instanceof Error ? error.message : String(error) },
       { status: 500 }
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada (GET por ID).");
+      } catch (releaseError: any) {
+        console.error("Erro ao liberar conexão MySQL (GET por ID):", releaseError.message);
+      }
+    }
   }
 }
 
@@ -175,47 +115,96 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let connection;
   try {
-    const oportunidades = await carregarOportunidades();
-    const id = await params.id;
-    const dadosAtualizados = await request.json();
-    
-    const index = oportunidades.findIndex(o => o.id === id);
-    
-    if (index === -1) {
-      return NextResponse.json(
-        { error: 'Oportunidade não encontrada' },
-        { status: 404 }
-      );
+    const { id } = params;
+    const data = await request.json();
+    console.log(`PUT /api/comercial/oportunidades/${id} - Atualizando oportunidade com MySQL:`, data);
+
+    if (!data.titulo || !data.clienteId) { // Validar clienteId em vez de cliente (nome)
+      return NextResponse.json({ error: 'Título e ID do cliente são obrigatórios' }, { status: 400 });
     }
-    
-    // Validação básica
-    if (!dadosAtualizados.titulo || !dadosAtualizados.cliente) {
-      return NextResponse.json(
-        { error: 'Título e cliente são campos obrigatórios' },
-        { status: 400 }
-      );
+     if (!data.tipo) {
+      return NextResponse.json({ error: 'O tipo da oportunidade (produto/serviço) é obrigatório' }, { status: 400 });
     }
-    
-    // Preservar ID e data de criação originais
-    const agora = new Date().toISOString();
-    const oportunidadeAtualizada: Oportunidade = {
-      ...dadosAtualizados,
-      id,
-      dataCriacao: oportunidades[index].dataCriacao,
-      dataAtualizacao: agora
+    if (data.tipo === 'produto' && !data.tipoFaturamento) {
+      return NextResponse.json({ error: 'Para produtos, o tipo de faturamento é obrigatório' }, { status: 400 });
+    }
+
+    connection = await getDbConnection();
+
+    const valorNumerico = parseCurrency(data.valor);
+    const prazoSql = parseDateString(data.prazo);
+    const dataReuniaoSql = parseDateString(data.dataReuniao);
+
+    const fieldsToUpdate: any = {
+      titulo: data.titulo,
+      cliente_id: data.clienteId, // Deve ser o ID do cliente
+      valor: valorNumerico,
+      responsavel_id: data.responsavelId || null,
+      prazo: prazoSql,
+      status: data.status || 'novo_lead',
+      descricao: data.descricao || null,
+      tipo: data.tipo,
+      tipo_faturamento: data.tipoFaturamento || null,
+      data_reuniao: dataReuniaoSql,
+      hora_reuniao: data.horaReuniao || null,
+      probabilidade: data.probabilidade === undefined ? null : Number(data.probabilidade),
+      posicao_kanban: data.posicaoKanban === undefined ? null : Number(data.posicaoKanban),
+      motivo_perda: data.motivoPerda || null,
+      // data_atualizacao é atualizado automaticamente pelo MySQL (ON UPDATE CURRENT_TIMESTAMP)
+      // ou updated_at se for o nome da coluna no DDL
     };
     
-    oportunidades[index] = oportunidadeAtualizada;
-    await salvarOportunidades(oportunidades);
+    const fieldNames = Object.keys(fieldsToUpdate).filter(key => fieldsToUpdate[key] !== undefined);
+    const fieldPlaceholders = fieldNames.map(key => `${key} = ?`).join(', ');
+    const values = fieldNames.map(key => fieldsToUpdate[key]);
+
+    if (fieldNames.length === 0) {
+      return NextResponse.json({ error: "Nenhum campo para atualizar fornecido." }, { status: 400 });
+    }
     
-    return NextResponse.json(oportunidadeAtualizada);
-  } catch (error) {
-    console.error('Erro ao atualizar oportunidade:', error);
+    // Adicionar data_atualizacao manualmente se não for ON UPDATE
+    // Assumindo que a tabela oportunidades tem `updated_at` e `data_atualizacao` com ON UPDATE CURRENT_TIMESTAMP ou DEFAULT CURRENT_TIMESTAMP
+    // Se não, precisaria adicionar `updated_at = NOW()` ou `data_atualizacao = NOW()` explicitamente.
+    // O DDL gerado para oportunidades tem `data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`
+    // e também `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`.
+    // Sendo assim, não é necessário setá-los manualmente no UPDATE.
+    
+    const sql = `UPDATE oportunidades SET ${fieldPlaceholders} WHERE id = ?`;
+    values.push(id);
+    
+    console.log("Executando SQL Update:", sql, values);
+    const [result]: any = await connection.execute(sql, values);
+
+    if (result.affectedRows === 0) {
+      return NextResponse.json({ error: 'Oportunidade não encontrada ou nenhum dado alterado' }, { status: 404 });
+    }
+
+    // Buscar e retornar a oportunidade atualizada da view
+    const [updatedOppRows]: any = await connection.execute('SELECT * FROM view_oportunidades WHERE id = ?', [id]);
+    if (updatedOppRows.length === 0) {
+        console.error("Erro ao buscar oportunidade atualizada da view.");
+        return NextResponse.json({ error: "Oportunidade atualizada, mas erro ao re-buscar." }, { status: 500 });
+    }
+    const oportunidadeFormatada = formatarOportunidadeDoMySQL(updatedOppRows[0]);
+    return NextResponse.json(oportunidadeFormatada);
+
+  } catch (error: any) {
+    console.error('Erro ao atualizar oportunidade (MySQL):', error);
     return NextResponse.json(
       { error: 'Erro ao atualizar oportunidade' },
       { status: 500 }
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada (PUT Oportunidade).");
+      } catch (releaseError: any) {
+        console.error("Erro ao liberar conexão MySQL (PUT Oportunidade):", releaseError.message);
+      }
+    }
   }
 }
 
@@ -224,91 +213,48 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let connection;
   try {
-    // Obter o ID dos parâmetros da rota de forma correta
-    const id = await params.id;
+    const { id } = params;
     const { status } = await request.json();
     
-    console.log(`Atualizando status da oportunidade ${id} para ${status}`);
-    
-    // Primeiro tentar atualizar no Supabase
-    try {
-      console.log(`Tentando atualizar no Supabase com ID: ${id}`);
-      
-      // Verificar se o ID é válido antes de tentar a atualização
-      if (!id) {
-        throw new Error('ID da oportunidade inválido');
-      }
-      
-      // Criar um timestamp atual para usar em ambos os campos de data
-      const currentTimestamp = new Date().toISOString();
-      
-      const { data, error } = await crmonefactory
-        .from('oportunidades')
-        .update({ 
-          status: status,
-          data_atualizacao: currentTimestamp
-          // Removido o campo updated_at que não existe na tabela
-        })
-        .eq('id', id)
-        .select()
-        .single();
-      
-      if (error) {
-        console.error("Erro detalhado na atualização Supabase:", JSON.stringify(error));
-        throw error; // Lançar o erro para cair no fallback
-      }
-      
-      // Se chegou aqui, a atualização no Supabase foi bem-sucedida
-      console.log("Atualização no Supabase bem-sucedida:", data);
-      return NextResponse.json({
-        id: id,
-        status,
-        success: true,
-        data: data || null
-      });
-      
-    } catch (supabaseError) {
-      console.error("Erro na atualização Supabase:", supabaseError);
-      console.log("Tentando fallback para arquivo local...");
-      
-      // Fallback: atualizar no arquivo local
-      const oportunidades = await carregarOportunidades();
-      const index = oportunidades.findIndex(o => o.id === id);
-      
-      if (index === -1) {
-        return NextResponse.json(
-          { error: 'Oportunidade não encontrada' },
-          { status: 404 }
-        );
-      }
-      
-      // Atualizar no arquivo local
-      const currentTimestamp = new Date().toISOString();
-      oportunidades[index] = {
-        ...oportunidades[index],
-        status,
-        dataAtualizacao: currentTimestamp
-        // Removido o campo updated_at que não é necessário
-      };
-      
-      await salvarOportunidades(oportunidades);
-      console.log("Atualização no arquivo local bem-sucedida");
-      
-      // Retornar a oportunidade atualizada do arquivo local
-      return NextResponse.json({
-        ...oportunidades[index],
-        success: true,
-        source: 'local_file'
-      });
+    if (!status) {
+        return NextResponse.json({ error: 'Status é obrigatório' }, { status: 400 });
     }
+    console.log(`PATCH /api/comercial/oportunidades/${id} - Atualizando status para ${status} com MySQL`);
     
-  } catch (error) {
-    console.error('Erro ao atualizar status:', error);
+    connection = await getDbConnection();
+    // Assumindo que a tabela oportunidades tem `data_atualizacao` e `updated_at` com ON UPDATE CURRENT_TIMESTAMP
+    const sql = 'UPDATE oportunidades SET status = ? WHERE id = ?';
+    const [result]: any = await connection.execute(sql, [status, id]);
+
+    if (result.affectedRows === 0) {
+      return NextResponse.json({ error: 'Oportunidade não encontrada ou status não alterado' }, { status: 404 });
+    }
+
+    // Buscar e retornar a oportunidade atualizada da view para consistência de dados
+    const [updatedOppRows]: any = await connection.execute('SELECT * FROM view_oportunidades WHERE id = ?', [id]);
+     if (updatedOppRows.length === 0) { // Should not happen if affectedRows > 0
+        return NextResponse.json({ message: "Status atualizado, mas erro ao re-buscar oportunidade." }, { status: 200 });
+    }
+    const oportunidadeFormatada = formatarOportunidadeDoMySQL(updatedOppRows[0]);
+    return NextResponse.json(oportunidadeFormatada);
+
+  } catch (error: any) {
+    console.error('Erro ao atualizar status da oportunidade (MySQL):', error);
     return NextResponse.json(
       { error: `Erro na atualização: ${error instanceof Error ? error.message : 'Erro desconhecido'}` },
       { status: 500 }
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada (PATCH Oportunidade).");
+      } catch (releaseError: any) {
+        console.error("Erro ao liberar conexão MySQL (PATCH Oportunidade):", releaseError.message);
+      }
+    }
   }
 }
 
@@ -317,25 +263,23 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let connection;
   try {
-    const oportunidades = await carregarOportunidades();
-    const id = await params.id;
-    
-    const index = oportunidades.findIndex(o => o.id === id);
-    
-    if (index === -1) {
-      return NextResponse.json(
-        { error: 'Oportunidade não encontrada' },
-        { status: 404 }
-      );
+    const { id } = params;
+    console.log(`DELETE /api/comercial/oportunidades/${id} - Excluindo oportunidade com MySQL`);
+
+    connection = await getDbConnection();
+    const sql = 'DELETE FROM oportunidades WHERE id = ?';
+    const [result]: any = await connection.execute(sql, [id]);
+
+    if (result.affectedRows === 0) {
+      return NextResponse.json({ error: 'Oportunidade não encontrada' }, { status: 404 });
     }
-    
-    oportunidades.splice(index, 1);
-    await salvarOportunidades(oportunidades);
-    
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Erro ao excluir oportunidade:', error);
+
+    return NextResponse.json({ message: 'Oportunidade excluída com sucesso' }); // 200 OK ou 204 No Content
+
+  } catch (error: any) {
+    console.error('Erro ao excluir oportunidade (MySQL):', error);
     return NextResponse.json(
       { error: 'Erro ao excluir oportunidade' },
       { status: 500 }

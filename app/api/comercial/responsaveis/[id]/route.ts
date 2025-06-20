@@ -1,65 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Responsavel } from '@/types/comercial';
-
-// Simulação de banco de dados em memória (mesma do arquivo anterior)
-let responsaveis: Responsavel[] = [
-  {
-    id: "r1",
-    nome: "Ana Silva",
-    email: "ana.silva@empresa.com",
-    cargo: "Gerente Comercial",
-    departamento: "Comercial",
-    ativo: true,
-  },
-  {
-    id: "r2",
-    nome: "Carlos Oliveira",
-    email: "carlos.oliveira@empresa.com",
-    cargo: "Consultor de Vendas",
-    departamento: "Comercial",
-    ativo: true,
-  },
-  {
-    id: "r3",
-    nome: "Pedro Santos",
-    email: "pedro.santos@empresa.com",
-    cargo: "Analista de Negócios",
-    departamento: "Comercial",
-    ativo: true,
-  },
-  {
-    id: "r4",
-    nome: "Maria Souza",
-    email: "maria.souza@empresa.com",
-    cargo: "Diretora Comercial",
-    departamento: "Diretoria",
-    ativo: true,
-  },
-];
+import { getDbConnection } from '@/lib/mysql/client';
+// A interface Responsavel de @/types/comercial pode precisar ser atualizada
 
 // GET - Obter um responsável específico
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let connection;
+  console.log(`GET /api/comercial/responsaveis/${params.id} - Iniciando consulta com MySQL`);
   try {
-    const id = params.id;
-    const responsavel = responsaveis.find((r) => r.id === id);
+    const { id } = params;
+    connection = await getDbConnection();
+
+    const [rows]: any = await connection.execute(
+      'SELECT id, user_id, nome, email, cargo, departamento, telefone, ativo, created_at, updated_at FROM responsaveis WHERE id = ?',
+      [id]
+    );
     
-    if (!responsavel) {
-      return NextResponse.json(
-        { error: 'Responsável não encontrado' },
-        { status: 404 }
-      );
+    if (rows.length === 0) {
+      return NextResponse.json({ error: 'Responsável não encontrado' }, { status: 404 });
     }
     
+    const responsavel = {
+        ...rows[0],
+        ativo: rows[0].ativo === 1,
+    };
     return NextResponse.json(responsavel);
-  } catch (error) {
-    console.error('Erro ao buscar responsável:', error);
+
+  } catch (error: any) {
+    console.error('Erro ao buscar responsável (MySQL):', error);
     return NextResponse.json(
-      { error: 'Erro ao buscar responsável' },
+      { error: 'Erro ao buscar responsável', details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada (GET Responsavel por ID).");
+      } catch (releaseError: any) {
+        console.error("Erro ao liberar conexão MySQL (GET Responsavel por ID):", releaseError.message);
+      }
+    }
   }
 }
 
@@ -68,65 +51,121 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let connection;
+  console.log(`PUT /api/comercial/responsaveis/${params.id} - Iniciando atualização com MySQL`);
   try {
-    const id = params.id;
+    const { id } = params;
     const data = await request.json();
-    
-    const index = responsaveis.findIndex((r) => r.id === id);
-    
-    if (index === -1) {
-      return NextResponse.json(
-        { error: 'Responsável não encontrado' },
-        { status: 404 }
-      );
+    console.log("Dados para atualização:", data);
+
+    // Campos que podem ser atualizados
+    const { nome, email, cargo, departamento, telefone, ativo, user_id } = data;
+
+    // Validação básica (pelo menos um campo para atualizar deve ser fornecido, exceto 'id')
+    if (Object.keys(data).length === 0) {
+        return NextResponse.json({ error: 'Nenhum dado fornecido para atualização' }, { status: 400 });
     }
     
-    // Atualizar responsável
+    connection = await getDbConnection();
+    
+    const fieldsToUpdate: any = {};
+    if (nome !== undefined) fieldsToUpdate.nome = nome;
+    if (email !== undefined) fieldsToUpdate.email = email;
+    if (cargo !== undefined) fieldsToUpdate.cargo = cargo;
+    if (departamento !== undefined) fieldsToUpdate.departamento = departamento;
+    if (telefone !== undefined) fieldsToUpdate.telefone = telefone;
+    if (ativo !== undefined) fieldsToUpdate.ativo = Boolean(ativo) ? 1 : 0;
+    if (user_id !== undefined) { // Permitir desassociar user_id passando null
+        if (user_id === null || (typeof user_id === 'string' && user_id.length === 36)) {
+            fieldsToUpdate.user_id = user_id;
+        } else if (user_id) { // se não for null e não for string uuid válida
+             return NextResponse.json({ error: 'user_id inválido para atualização.' }, { status: 400 });
+        }
+    }
+
+
+    if (Object.keys(fieldsToUpdate).length === 0) {
+        return NextResponse.json({ error: 'Nenhum campo válido fornecido para atualização' }, { status: 400 });
+    }
+
+    const fieldNames = Object.keys(fieldsToUpdate);
+    const fieldPlaceholders = fieldNames.map(key => `${key} = ?`).join(', ');
+    const values = fieldNames.map(key => fieldsToUpdate[key]);
+
+    // Adicionar updated_at = NOW()
+    const sql = `UPDATE responsaveis SET ${fieldPlaceholders}, updated_at = NOW() WHERE id = ?`;
+    values.push(id);
+    
+    console.log("Executando SQL Update:", sql, values);
+    const [result]: any = await connection.execute(sql, values);
+
+    if (result.affectedRows === 0) {
+      return NextResponse.json({ error: 'Responsável não encontrado ou nenhum dado alterado' }, { status: 404 });
+    }
+
+    // Buscar e retornar o responsável atualizado
+    const [updatedRows]: any = await connection.execute('SELECT * FROM responsaveis WHERE id = ?', [id]);
+     if (updatedRows.length === 0) {
+        return NextResponse.json({ error: "Responsável atualizado, mas erro ao re-buscar." }, { status: 500 });
+    }
     const responsavelAtualizado = {
-      ...responsaveis[index],
-      ...data,
+        ...updatedRows[0],
+        ativo: updatedRows[0].ativo === 1,
     };
-    
-    responsaveis[index] = responsavelAtualizado;
-    
     return NextResponse.json(responsavelAtualizado);
-  } catch (error) {
-    console.error('Erro ao atualizar responsável:', error);
+
+  } catch (error: any) {
+    console.error('Erro ao atualizar responsável (MySQL):', error);
     return NextResponse.json(
-      { error: 'Erro ao atualizar responsável' },
+      { error: 'Erro ao atualizar responsável', details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada (PUT Responsavel).");
+      } catch (releaseError: any) {
+        console.error("Erro ao liberar conexão MySQL (PUT Responsavel):", releaseError.message);
+      }
+    }
   }
 }
 
-// DELETE - Desativar um responsável (não excluir permanentemente)
+// DELETE - Desativar um responsável (soft delete)
 export async function DELETE(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let connection;
+  console.log(`DELETE /api/comercial/responsaveis/${params.id} - Iniciando desativação (soft delete) com MySQL`);
   try {
-    const id = params.id;
-    const index = responsaveis.findIndex((r) => r.id === id);
+    const { id } = params;
+    connection = await getDbConnection();
     
-    if (index === -1) {
-      return NextResponse.json(
-        { error: 'Responsável não encontrado' },
-        { status: 404 }
-      );
+    const sql = 'UPDATE responsaveis SET ativo = 0, updated_at = NOW() WHERE id = ?';
+    const [result]: any = await connection.execute(sql, [id]);
+
+    if (result.affectedRows === 0) {
+      return NextResponse.json({ error: 'Responsável não encontrado' }, { status: 404 });
     }
     
-    // Desativar responsável em vez de excluir
-    responsaveis[index] = {
-      ...responsaveis[index],
-      ativo: false,
-    };
-    
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Erro ao desativar responsável:', error);
+    return NextResponse.json({ message: 'Responsável desativado com sucesso' });
+
+  } catch (error: any) {
+    console.error('Erro ao desativar responsável (MySQL):', error);
     return NextResponse.json(
-      { error: 'Erro ao desativar responsável' },
+      { error: 'Erro ao desativar responsável', details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada (DELETE Responsavel).");
+      } catch (releaseError: any) {
+        console.error("Erro ao liberar conexão MySQL (DELETE Responsavel):", releaseError.message);
+      }
+    }
   }
 }

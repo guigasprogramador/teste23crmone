@@ -1,504 +1,310 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Oportunidade, OportunidadeStatus } from '@/types/comercial';
-import { supabase, crmonefactory } from "@/lib/supabase/client";
-import * as fs from 'fs';
-import * as path from 'path';
+import { Oportunidade } from '@/types/comercial'; // OportunidadeStatus might not be needed if status is string
+import { getDbConnection } from '@/lib/mysql/client';
+import { v4 as uuidv4 } from 'uuid';
 
-// Path para o arquivo de "banco de dados" local (apenas para compatibilidade)
-const dbPath = path.join(process.cwd(), 'data', 'oportunidades.json');
-
-// Função para carregar os dados do arquivo
-async function carregarOportunidades(): Promise<Oportunidade[]> {
-  try {
-    // Garantir que o diretório existe
-    const dir = path.dirname(dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+// Função auxiliar para formatar oportunidades do MySQL para o formato da aplicação
+function formatarOportunidadesDoMySQL(oportunidades: any[]): Oportunidade[] {
+  return oportunidades.map(opp => {
+    let prazoFormatted = 'Não definido';
+    if (opp.prazo) {
+      const dataPrazo = new Date(opp.prazo);
+      // Ajuste para evitar problemas de fuso horário que podem mudar a data
+      const userTimezoneOffset = dataPrazo.getTimezoneOffset() * 60000;
+      prazoFormatted = new Date(dataPrazo.getTime() + userTimezoneOffset).toLocaleDateString('pt-BR');
     }
-    
-    // Criar arquivo se não existir
-    if (!fs.existsSync(dbPath)) {
-      // Dados iniciais para o "banco de dados"
-      const oportunidadesIniciais: Oportunidade[] = [
-        {
-          id: "1",
-          titulo: "Sistema de Gestão Municipal",
-          cliente: "Prefeitura de São Paulo",
-          clienteId: "c1",
-          valor: "R$ 450.000,00",
-          responsavel: "Ana Silva",
-          responsavelId: "r1",
-          prazo: "30/06/2023",
-          status: "novo_lead",
-          dataCriacao: "2023-01-15T10:30:00Z",
-          dataAtualizacao: "2023-01-15T10:30:00Z",
-          tipo: "produto",
-          tipoFaturamento: "direto",
-        },
-        // ... outros dados iniciais
-      ];
-      
-      fs.writeFileSync(dbPath, JSON.stringify(oportunidadesIniciais, null, 2));
-      return oportunidadesIniciais;
-    }
-    
-    // Ler do arquivo
-    const data = fs.readFileSync(dbPath, 'utf8');
-    return JSON.parse(data);
-  } catch (error) {
-    console.error('Erro ao carregar oportunidades do arquivo:', error);
-    return [];
-  }
-}
 
-// Função para salvar os dados no arquivo
-async function salvarOportunidades(oportunidades: Oportunidade[]): Promise<void> {
-  try {
-    const dir = path.dirname(dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    let dataReuniaoFormatted = '';
+    if (opp.data_reuniao) {
+      const dataReuniao = new Date(opp.data_reuniao);
+      const userTimezoneOffset = dataReuniao.getTimezoneOffset() * 60000;
+      dataReuniaoFormatted = new Date(dataReuniao.getTime() + userTimezoneOffset).toLocaleDateString('pt-BR');
     }
-    fs.writeFileSync(dbPath, JSON.stringify(oportunidades, null, 2));
-  } catch (error) {
-    console.error('Erro ao salvar oportunidades no arquivo:', error);
-  }
-}
 
-// Função auxiliar para formatar oportunidades do Supabase para o formato da aplicação
-function formatarOportunidadesDoSupabase(oportunidades: any[]): Oportunidade[] {
-  return oportunidades.map(opp => ({
-    id: opp.id,
-    titulo: opp.titulo,
-    cliente: opp.cliente_nome || 'Cliente não especificado',
-    clienteId: opp.cliente_id,
-    valor: opp.valor ? `R$ ${opp.valor.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : 'A definir',
-    responsavel: opp.responsavel_nome || 'Não atribuído',
-    responsavelId: opp.responsavel_id,
-    prazo: opp.prazo ? new Date(opp.prazo).toLocaleDateString('pt-BR') : 'Não definido',
-    status: opp.status,
-    descricao: opp.descricao,
-    dataCriacao: opp.data_criacao,
-    dataAtualizacao: opp.data_atualizacao,
-    tipo: opp.tipo,
-    tipoFaturamento: opp.tipo_faturamento,
-    dataReuniao: opp.data_reuniao ? new Date(opp.data_reuniao).toLocaleDateString('pt-BR') : '',
-    horaReuniao: opp.hora_reuniao,
-    probabilidade: opp.probabilidade
-  }));
+    return {
+      id: opp.id,
+      titulo: opp.titulo,
+      // Campos da view_oportunidades
+      cliente: opp.cliente_nome || 'Cliente não especificado',
+      clienteId: opp.cliente_id,
+      valor: opp.valor ? `R$ ${Number(opp.valor).toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : 'A definir',
+      responsavel: opp.responsavel_nome || 'Não atribuído',
+      responsavelId: opp.responsavel_id,
+      prazo: prazoFormatted,
+      status: opp.status,
+      descricao: opp.oportunidade_descricao, // Nome do campo na view_oportunidades
+      dataCriacao: opp.data_criacao, // da tabela oportunidades, alias o.data_criacao na view
+      dataAtualizacao: opp.data_atualizacao, // da tabela oportunidades, alias o.data_atualizacao na view
+      tipo: opp.tipo,
+      tipoFaturamento: opp.tipo_faturamento,
+      dataReuniao: dataReuniaoFormatted,
+      horaReuniao: opp.hora_reuniao, // hh:mm:ss
+      probabilidade: opp.probabilidade,
+      // Campos que podem não estar na view, mas estavam no tipo Oportunidade
+      cnpj: opp.cliente_cnpj, // da view
+      contatoNome: opp.contato_nome, // da view
+      contatoTelefone: opp.contato_telefone, // da view
+      contatoEmail: opp.contato_email, // da view
+      segmento: opp.cliente_segmento, // da view
+      // endereco: opp.cliente_endereco, // Se precisar e estiver na view
+      // responsaveisIds: [], // Este campo precisaria de lógica adicional se usado
+    };
+  });
 }
 
 // GET - Listar todas as oportunidades ou filtrar
 export async function GET(request: NextRequest) {
-  console.log("GET /api/comercial/oportunidades - Iniciando consulta de oportunidades");
+  console.log("GET /api/comercial/oportunidades - Iniciando consulta de oportunidades com MySQL");
+  let connection;
   try {
     const { searchParams } = new URL(request.url);
     
-    // Parâmetros de filtro
     const termo = searchParams.get('termo');
     const status = searchParams.get('status');
-    const cliente = searchParams.get('cliente');
-    const responsavel = searchParams.get('responsavel');
-    const dataInicio = searchParams.get('dataInicio');
-    const dataFim = searchParams.get('dataFim');
+    const clienteNome = searchParams.get('cliente'); // Filtrando por nome do cliente
+    const responsavelNome = searchParams.get('responsavel'); // Filtrando por nome do responsável
+    const dataInicio = searchParams.get('dataInicio'); // YYYY-MM-DD
+    const dataFim = searchParams.get('dataFim'); // YYYY-MM-DD
     
-    console.log("Filtros aplicados:", { termo, status, cliente, responsavel, dataInicio, dataFim });
+    console.log("Filtros aplicados:", { termo, status, clienteNome, responsavelNome, dataInicio, dataFim });
     
-    // PRIMEIRA TENTATIVA: Buscar no Supabase
-    try {
-      console.log("Buscando oportunidades no Supabase");
-      
-      // Montar a consulta básica usando a view_oportunidades que já inclui dados relacionados
-      let query = crmonefactory
-        .from('view_oportunidades')
-        .select('*');
-      
-      // Aplicar filtros
-      if (termo) {
-        query = query.or(`titulo.ilike.%${termo}%,cliente_nome.ilike.%${termo}%,descricao.ilike.%${termo}%`);
-      }
-      
-      if (status && status !== 'todos') {
-        query = query.eq('status', status);
-      }
-      
-      if (cliente && cliente !== 'todos') {
-        query = query.eq('cliente_nome', cliente);
-      }
-      
-      if (responsavel && responsavel !== 'todos') {
-        query = query.eq('responsavel_nome', responsavel);
-      }
-      
-      if (dataInicio) {
-        query = query.gte('prazo', dataInicio);
-      }
-      
-      if (dataFim) {
-        query = query.lte('prazo', dataFim);
-      }
-      
-      // Ordenar por data de criação
-      query = query.order('data_criacao', { ascending: false });
-      
-      const { data, error } = await query;
-      
-      if (error) {
-        console.error("Erro ao consultar oportunidades no Supabase:", error);
-        throw error;
-      }
-      
-      if (data && data.length > 0) {
-        console.log(`Encontradas ${data.length} oportunidades no Supabase`);
-        // Converter para o formato esperado pelo frontend
-        const formatadas = formatarOportunidadesDoSupabase(data);
-        return NextResponse.json(formatadas);
-      }
-      
-      console.log("Nenhuma oportunidade encontrada no Supabase, usando arquivo local como fallback");
-    } catch (supabaseError) {
-      console.error("Falha ao consultar Supabase:", supabaseError);
-    }
+    connection = await getDbConnection();
     
-    // FALLBACK: Usar o arquivo JSON local
-    console.log("Usando arquivo local para buscar oportunidades");
-    const oportunidades = await carregarOportunidades();
-    
-    let resultado = [...oportunidades];
-    
-    // Aplicar filtros nos dados locais
+    let sql = 'SELECT * FROM view_oportunidades';
+    const conditions: string[] = [];
+    const params: any[] = [];
+
     if (termo) {
-      const termoBusca = termo.toLowerCase();
-      resultado = resultado.filter(
-        (item) =>
-          item.titulo.toLowerCase().includes(termoBusca) ||
-          item.cliente.toLowerCase().includes(termoBusca) ||
-          item.descricao?.toLowerCase().includes(termoBusca)
-      );
+      conditions.push('(titulo LIKE ? OR cliente_nome LIKE ? OR oportunidade_descricao LIKE ?)');
+      const searchTerm = `%${termo}%`;
+      params.push(searchTerm, searchTerm, searchTerm);
     }
     
     if (status && status !== 'todos') {
-      resultado = resultado.filter((item) => item.status === status);
+      conditions.push('status = ?');
+      params.push(status);
     }
     
-    if (cliente && cliente !== 'todos') {
-      resultado = resultado.filter((item) => item.cliente === cliente);
+    if (clienteNome && clienteNome !== 'todos') {
+      // Assumindo que o frontend envia o nome do cliente para filtro
+      conditions.push('cliente_nome = ?');
+      params.push(clienteNome);
     }
     
-    if (responsavel && responsavel !== 'todos') {
-      resultado = resultado.filter((item) => item.responsavel === responsavel);
+    if (responsavelNome && responsavelNome !== 'todos') {
+      // Assumindo que o frontend envia o nome do responsável para filtro
+      conditions.push('responsavel_nome = ?');
+      params.push(responsavelNome);
     }
     
     if (dataInicio) {
-      const dataInicioObj = new Date(dataInicio);
-      resultado = resultado.filter((item) => {
-        const dataPrazo = new Date(item.prazo.split('/').reverse().join('-'));
-        return dataPrazo >= dataInicioObj;
-      });
+      conditions.push('prazo >= ?');
+      params.push(dataInicio); // Espera-se YYYY-MM-DD
     }
     
     if (dataFim) {
-      const dataFimObj = new Date(dataFim);
-      resultado = resultado.filter((item) => {
-        const dataPrazo = new Date(item.prazo.split('/').reverse().join('-'));
-        return dataPrazo <= dataFimObj;
-      });
+      conditions.push('prazo <= ?');
+      params.push(dataFim); // Espera-se YYYY-MM-DD
+    }
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+
+    sql += ' ORDER BY data_criacao DESC'; // data_criacao da tabela oportunidades
+
+    console.log("Executando SQL:", sql, params);
+    const [rows] = await connection.execute(sql, params);
+    const data = rows as any[];
+
+    if (data && data.length > 0) {
+      console.log(`Encontradas ${data.length} oportunidades no MySQL`);
+      const formatadas = formatarOportunidadesDoMySQL(data);
+      return NextResponse.json(formatadas);
     }
     
-    console.log(`Retornando ${resultado.length} oportunidades do arquivo local`);
-    return NextResponse.json(resultado);
-  } catch (error) {
-    console.error('Erro ao processar requisição de oportunidades:', error);
+    console.log("Nenhuma oportunidade encontrada no MySQL com os filtros aplicados.");
+    return NextResponse.json([]);
+
+  } catch (error: any) {
+    console.error('Erro ao processar requisição de oportunidades (MySQL):', error);
+    if (connection) await connection.release();
     return NextResponse.json(
       { error: 'Erro interno ao processar requisição de oportunidades' },
       { status: 500 }
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada (GET Oportunidades).");
+      } catch (releaseError: any) {
+        console.error("Erro ao liberar conexão MySQL (GET Oportunidades):", releaseError.message);
+      }
+    }
   }
 }
 
+// Helper para converter string DD/MM/YYYY para YYYY-MM-DD
+function parseDateString(dateString: string | undefined | null): string | null {
+  if (!dateString || dateString === 'Não definido') return null;
+  const parts = dateString.split('/');
+  if (parts.length === 3) {
+    return `${parts[2]}-${parts[1]}-${parts[0]}`; // YYYY-MM-DD
+  }
+  // Tentar parsear diretamente se já estiver em formato compatível ou ISO
+  const date = new Date(dateString);
+  if (!isNaN(date.getTime())) {
+    return date.toISOString().split('T')[0];
+  }
+  return null;
+}
+
+// Helper para converter valor monetário "R$ X.XXX,XX" para DECIMAL
+function parseCurrency(currencyString: string | undefined | null): number | null {
+  if (!currencyString || currencyString === 'A definir') return null;
+  const cleaned = currencyString.replace("R$", "").replace(/\./g, "").replace(",", ".").trim();
+  const value = parseFloat(cleaned);
+  return isNaN(value) ? null : value;
+}
+
+
 // POST - Criar nova oportunidade
 export async function POST(request: NextRequest) {
+  let connection;
+  console.log('POST /api/comercial/oportunidades - Iniciando criação de oportunidade com MySQL');
   try {
     const data = await request.json();
     console.log('Dados recebidos para criar oportunidade:', data);
     
-    // Validação básica
     if (!data.titulo || !data.cliente) {
-      return NextResponse.json(
-        { error: 'Título e cliente são obrigatórios' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Título e nome do cliente são obrigatórios' }, { status: 400 });
     }
-    
-    // Validação adicional para tipo e tipoFaturamento
     if (!data.tipo) {
-      return NextResponse.json(
-        { error: 'O tipo da oportunidade (produto/serviço) é obrigatório' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'O tipo da oportunidade (produto/serviço) é obrigatório' }, { status: 400 });
     }
-    
-    // Se for produto, tipoFaturamento é obrigatório
     if (data.tipo === 'produto' && !data.tipoFaturamento) {
-      return NextResponse.json(
-        { error: 'Para produtos, o tipo de faturamento é obrigatório' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Para produtos, o tipo de faturamento é obrigatório' }, { status: 400 });
     }
 
-    // Verificar se o cliente já existe (pelo CNPJ ou nome)
-    let clienteId;
-    let clienteExistente;
+    connection = await getDbConnection();
+    await connection.beginTransaction();
+    console.log("Transação MySQL iniciada.");
 
-    if (data.cnpj) {
-      console.log('Verificando cliente pelo CNPJ:', data.cnpj);
-      const { data: clientePorCnpj } = await crmonefactory
-        .from('clientes')
-        .select('id, nome')
-        .eq('cnpj', data.cnpj)
-        .single();
-      
-      clienteExistente = clientePorCnpj;
-    }
+    let clienteId = data.clienteId; // Se o ID do cliente já é fornecido
 
-    if (!clienteExistente && data.cliente) {
-      console.log('Verificando cliente pelo nome:', data.cliente);
-      const { data: clientePorNome } = await crmonefactory
-        .from('clientes')
-        .select('id, nome')
-        .eq('nome', data.cliente)
-        .single();
-      
-      clienteExistente = clientePorNome;
-    }
-
-    // Se o cliente não existir, criar um novo
-    if (!clienteExistente && (data.cliente && data.cnpj)) {
-      console.log('Cliente não encontrado. Criando novo cliente:', data.cliente);
-      console.log('Dados do cliente para criação:', {
-        nome: data.cliente,
-        cnpj: data.cnpj,
-        contatoNome: data.contatoNome,
-        contatoEmail: data.contatoEmail,
-        segmento: data.segmento
-      });
-      
-      // Preparar os dados do cliente para inserção
-      const novoCliente = {
-        nome: data.cliente,
-        cnpj: data.cnpj,
-        contato_nome: data.contatoNome,
-        contato_telefone: data.contatoTelefone || '',
-        contato_email: data.contatoEmail,
-        endereco: data.endereco || '',
-        segmento: data.segmento || 'Outros',
-        data_cadastro: new Date().toISOString(),
-        ativo: true,
-        // Campos adicionais se disponíveis
-        cidade: data.cidade || '',
-        estado: data.estado || '',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-      
-      // Inserir o novo cliente no Supabase
-      const { data: clienteCriado, error } = await crmonefactory
-        .from('clientes')
-        .insert(novoCliente)
-        .select()
-        .single();
-      
-      if (error) {
-        console.error('Erro ao criar cliente:', error);
-        console.error('Detalhes do erro:', {
-          mensagem: error.message,
-          código: error.code,
-          detalhes: error.details,
-          hint: error.hint
-        });
+    if (!clienteId) {
+        // Tentar encontrar cliente existente pelo CNPJ ou nome
+        let existingClientQuery = 'SELECT id FROM clientes WHERE ';
+        const queryParams = [];
+        if (data.cnpj) {
+            existingClientQuery += 'cnpj = ?';
+            queryParams.push(data.cnpj);
+        } else {
+            existingClientQuery += 'nome = ?'; // Fallback para nome se CNPJ não fornecido
+            queryParams.push(data.cliente);
+        }
         
-        // Não retornar erro, continuar com a criação da oportunidade
-        // Mas logar o erro para debug
-      } else {
-        console.log('Novo cliente criado com sucesso:', clienteCriado);
-        clienteId = clienteCriado.id;
-      }
-    } else if (clienteExistente) {
-      console.log('Cliente encontrado no banco de dados:', clienteExistente.id);
-      clienteId = clienteExistente.id;
+        const [clientRows]: any = await connection.execute(existingClientQuery, queryParams);
+
+        if (clientRows.length > 0) {
+            clienteId = clientRows[0].id;
+            console.log('Cliente existente encontrado no MySQL:', clienteId);
+        } else if (data.cliente && data.cnpj) { // Criar novo cliente apenas se CNPJ E nome foram fornecidos
+            const newClientId = uuidv4();
+            const novoClienteDB = {
+                id: newClientId,
+                nome: data.cliente,
+                cnpj: data.cnpj,
+                contato_nome: data.contatoNome || null,
+                contato_telefone: data.contatoTelefone || null,
+                contato_email: data.contatoEmail || null,
+                endereco: data.endereco || null,
+                cidade: data.cidade || null,
+                estado: data.estado || null,
+                segmento: data.segmento || 'Outros',
+                ativo: 1,
+                // data_cadastro, created_at, updated_at terão default ou serão NOW()
+            };
+            console.log('Criando novo cliente no MySQL:', novoClienteDB);
+            await connection.execute(
+              'INSERT INTO clientes (id, nome, cnpj, contato_nome, contato_telefone, contato_email, endereco, cidade, estado, segmento, ativo, data_cadastro, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())',
+              Object.values(novoClienteDB)
+            );
+            clienteId = newClientId;
+            console.log('Novo cliente criado no MySQL com ID:', clienteId);
+        } else {
+            // Se não encontrou e não tem dados suficientes para criar, pode ser um erro ou clienteId opcional
+            // Por ora, se clienteId não foi encontrado ou criado, a oportunidade será criada sem ele se o campo for nullable
+             if (!clienteId && data.cliente) { // Se apenas o nome do cliente foi passado e não encontrado
+                console.warn(`Cliente com nome "${data.cliente}" não encontrado e CNPJ não fornecido. Oportunidade será criada sem cliente associado se o campo cliente_id for opcional, ou falhará se for obrigatório e não nulo.`);
+                // Se cliente_id for NOT NULL na tabela oportunidades, esta lógica precisa ser revista
+                // ou o frontend precisa garantir que um clienteId válido ou dados para criação sejam enviados.
+                // Para este exemplo, vamos permitir que clienteId seja null se não encontrado/criado.
+             }
+        }
     }
 
-    // Carregar oportunidades existentes do arquivo JSON
-    const oportunidades = await carregarOportunidades();
-    
-    // Criar nova oportunidade
-    const novaOportunidade: Oportunidade = {
-      id: `opp-${Date.now()}`,
+
+    const newOpportunityId = uuidv4();
+    const valorNumerico = parseCurrency(data.valor);
+    const prazoSql = parseDateString(data.prazo);
+    const dataReuniaoSql = parseDateString(data.dataReuniao);
+
+    const oportunidadeDB = {
+      id: newOpportunityId,
       titulo: data.titulo,
-      cliente: data.cliente,
-      clienteId: clienteId || data.clienteId || `client-${Date.now()}`,
-      valor: data.valor || 'A definir',
-      responsavel: data.responsavel || 'Não atribuído',
-      responsavelId: data.responsavelId || '',
-      prazo: data.prazo || 'Não definido',
+      cliente_id: clienteId || null, // Garante null se não encontrado/criado
+      valor: valorNumerico,
+      responsavel_id: data.responsavelId || null,
+      prazo: prazoSql,
       status: data.status || 'novo_lead',
-      descricao: data.descricao || '',
-      dataCriacao: new Date().toISOString(),
-      dataAtualizacao: new Date().toISOString(),
-      // Campos adicionais
-      cnpj: data.cnpj,
-      contatoNome: data.contatoNome,
-      contatoTelefone: data.contatoTelefone,
-      contatoEmail: data.contatoEmail,
-      endereco: data.endereco,
-      segmento: data.segmento,
-      dataReuniao: data.dataReuniao,
-      horaReuniao: data.horaReuniao,
-      responsaveisIds: data.responsaveisIds,
+      descricao: data.descricao || null,
+      // data_criacao e data_atualizacao são gerenciados pelo MySQL (DEFAULT CURRENT_TIMESTAMP / ON UPDATE)
+      // mas created_at e updated_at são padrão do DDL, vamos usar NOW() para eles
       tipo: data.tipo,
-      tipoFaturamento: data.tipoFaturamento,
+      tipo_faturamento: data.tipoFaturamento || null,
+      data_reuniao: dataReuniaoSql,
+      hora_reuniao: data.horaReuniao || null, // hh:mm:ss
+      probabilidade: data.probabilidade || 50,
+      posicao_kanban: data.posicaoKanban || 0,
+      // created_at e updated_at serão definidos como NOW() na query
     };
-    
-    // Salvar a oportunidade no Supabase
-    try {
-      console.log('Criando oportunidade no Supabase');
-      
-      // Converter valor para formato numérico
-      let valorNumerico = 0;
-      if (novaOportunidade.valor) {
-        // Remover 'R$' e outros caracteres não numéricos, manter apenas dígitos, ponto e vírgula
-        const valorLimpo = novaOportunidade.valor.replace(/[^0-9,.]/g, '');
-        // Substituir vírgula por ponto para conversão numérica correta
-        const valorComPonto = valorLimpo.replace(',', '.');
-        valorNumerico = parseFloat(valorComPonto) || 0;
-      }
-      
-      // Tratar datas corretamente
-      let prazoDate = null;
-      if (novaOportunidade.prazo && novaOportunidade.prazo !== 'Não definido') {
-        try {
-          // Convertendo formato DD/MM/YYYY para YYYY-MM-DD
-          const partes = novaOportunidade.prazo.split('/');
-          if (partes.length === 3) {
-            prazoDate = `${partes[2]}-${partes[1]}-${partes[0]}`;
-          }
-        } catch (e) {
-          console.error('Erro ao converter data de prazo:', e);
-        }
-      }
-      
-      let dataReuniaoDate = null;
-      if (novaOportunidade.dataReuniao) {
-        try {
-          // Convertendo formato DD/MM/YYYY para YYYY-MM-DD
-          const partes = novaOportunidade.dataReuniao.split('/');
-          if (partes.length === 3) {
-            dataReuniaoDate = `${partes[2]}-${partes[1]}-${partes[0]}`;
-          }
-        } catch (e) {
-          console.error('Erro ao converter data de reunião:', e);
-        }
-      }
-      
-      // Converter para o formato do banco de dados
-      const oportunidadeDB = {
-        titulo: novaOportunidade.titulo,
-        cliente_id: clienteId || null,
-        valor: valorNumerico,
-        responsavel_id: novaOportunidade.responsavelId || null,
-        prazo: prazoDate,
-        status: novaOportunidade.status || 'novo_lead',
-        descricao: novaOportunidade.descricao || '',
-        data_criacao: new Date().toISOString(),
-        data_atualizacao: new Date().toISOString(),
-        tipo: novaOportunidade.tipo || 'servico',
-        tipo_faturamento: novaOportunidade.tipoFaturamento,
-        data_reuniao: dataReuniaoDate,
-        hora_reuniao: novaOportunidade.horaReuniao || null,
-        probabilidade: 50, // Valor padrão para nova oportunidade
-        posicao_kanban: 0 // Posição inicial
-      };
-      
-      console.log('Dados formatados para inserção no Supabase:', oportunidadeDB);
-      
-      const { data: oportunidadeBD, error } = await crmonefactory
-        .from('oportunidades')
-        .insert(oportunidadeDB)
-        .select()
-        .single();
-      
-      if (error) {
-        console.error('Erro ao criar oportunidade no Supabase:', error);
-        console.error('Detalhes do erro:', {
-          mensagem: error.message,
-          código: error.code,
-          detalhes: error.details,
-          hint: error.hint
-        });
-        
-        // Tratamento específico para diferentes tipos de erros
-        if (error.code === '23503' && error.message.includes('foreign key constraint')) {
-          // Erro de chave estrangeira - geralmente cliente_id ou responsavel_id inválido
-          let mensagemErro = 'Falha na validação de dados relacionados';
-          if (error.message.includes('cliente_id')) {
-            mensagemErro = 'Cliente selecionado é inválido ou não existe mais no sistema';
-          } else if (error.message.includes('responsavel_id')) {
-            mensagemErro = 'Responsável selecionado é inválido ou não existe mais no sistema';
-          }
-          
-          return NextResponse.json(
-            { error: mensagemErro },
-            { status: 400 }
-          );
-        }
-        
-        if (error.code === '23505') {
-          // Erro de valor duplicado (unique constraint)
-          return NextResponse.json(
-            { error: 'Já existe uma oportunidade com estas informações no sistema' },
-            { status: 409 }
-          );
-        }
-        
-        if (error.code === '22P02') {
-          // Erro de tipo de dados inválido
-          return NextResponse.json(
-            { error: 'Dados em formato inválido. Verifique os valores dos campos e tente novamente.' },
-            { status: 400 }
-          );
-        }
 
-        if (error.code === '42501') {
-          // Erro de permissão
-          return NextResponse.json(
-            { error: 'Você não tem permissão para criar oportunidades. Entre em contato com o administrador.' },
-            { status: 403 }
-          );
-        }
-        
-        // Erro genérico para outros casos
-        return NextResponse.json(
-          { error: `Erro ao salvar oportunidade: ${error.message}` },
-          { status: 500 }
-        );
-      } else {
-        console.log('Oportunidade criada no Supabase com sucesso:', oportunidadeBD.id);
-        novaOportunidade.id = oportunidadeBD.id;
-      }
-    } catch (erro) {
-      console.error('Erro ao salvar oportunidade no Supabase:', erro);
-      return NextResponse.json(
-        { error: 'Erro interno ao processar a oportunidade. Tente novamente.' },
-        { status: 500 }
-      );
+    console.log('Inserindo oportunidade no MySQL:', oportunidadeDB);
+    await connection.execute(
+      'INSERT INTO oportunidades (id, titulo, cliente_id, valor, responsavel_id, prazo, status, descricao, tipo, tipo_faturamento, data_reuniao, hora_reuniao, probabilidade, posicao_kanban, data_criacao, data_atualizacao, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), NOW())',
+      [
+        oportunidadeDB.id, oportunidadeDB.titulo, oportunidadeDB.cliente_id, oportunidadeDB.valor, oportunidadeDB.responsavel_id,
+        oportunidadeDB.prazo, oportunidadeDB.status, oportunidadeDB.descricao, oportunidadeDB.tipo, oportunidadeDB.tipo_faturamento,
+        oportunidadeDB.data_reuniao, oportunidadeDB.hora_reuniao, oportunidadeDB.probabilidade, oportunidadeDB.posicao_kanban
+      ]
+    );
+
+    await connection.commit();
+    console.log("Transação MySQL commitada. Oportunidade criada com ID:", newOpportunityId);
+
+    // Buscar a oportunidade recém-criada usando a view para retornar dados formatados
+    const [newOppRows]: any = await connection.execute('SELECT * FROM view_oportunidades WHERE id = ?', [newOpportunityId]);
+    if (newOppRows.length === 0) {
+        console.error("Erro ao buscar oportunidade recém-criada da view.");
+        // Retornar os dados brutos inseridos como fallback, mas idealmente a view deveria funcionar
+        return NextResponse.json({ id: newOpportunityId, ...data }, { status: 201 });
     }
     
-    // Adicionar a oportunidade ao arquivo local (manter para compatibilidade)
-    oportunidades.push(novaOportunidade);
-    await salvarOportunidades(oportunidades);
-    
-    return NextResponse.json(novaOportunidade, { status: 201 });
-  } catch (error) {
-    console.error('Erro ao criar oportunidade:', error);
+    const [formattedNewOpportunity] = formatarOportunidadesDoMySQL(newOppRows);
+    return NextResponse.json(formattedNewOpportunity, { status: 201 });
+
+  } catch (error: any) {
+    console.error('Erro ao criar oportunidade (MySQL):', error);
+    if (connection) {
+      try {
+        await connection.rollback();
+        console.log("Transação MySQL revertida devido a erro.");
+      } catch (rollbackError: any) {
+        console.error("Erro ao tentar reverter transação MySQL:", rollbackError.message);
+      }
+    }
     return NextResponse.json(
       { error: 'Erro ao criar oportunidade' },
       { status: 500 }
