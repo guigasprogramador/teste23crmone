@@ -18,6 +18,9 @@ yarn-error.log*
 
 # env files
 .env*
+# Ignore all local environment files, except for the example template
+*.local
+!.env.example
 
 # vercel
 .vercel

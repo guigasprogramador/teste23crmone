@@ -1,74 +1,87 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase/client";
+import { getDbConnection } from '@/lib/mysql/client';
 import { generateAccessToken, verifyRefreshToken } from "@/lib/auth/jwt";
 
 export async function GET(request: NextRequest) {
+  let connection;
   try {
-    // Obter refresh token do cookie
-    const refreshToken = request.cookies.get("refreshToken")?.value;
+    console.log("Iniciando processo de refresh de token com MySQL");
+    const refreshTokenFromCookie = request.cookies.get("refreshToken")?.value;
     
-    if (!refreshToken) {
+    if (!refreshTokenFromCookie) {
+      console.log("Refresh token não encontrado no cookie");
       return NextResponse.json(
         { error: "Refresh token não encontrado" },
         { status: 401 }
       );
     }
     
-    // Verificar refresh token
-    const userId = verifyRefreshToken(refreshToken);
+    console.log("Verificando JWT do refresh token");
+    const decodedToken = verifyRefreshToken(refreshTokenFromCookie); // Renomeado para clareza
     
-    if (!userId) {
+    if (!decodedToken || !decodedToken.userId) { // Checar se userId existe no payload decodificado
+      console.log("Refresh token JWT inválido ou expirado");
       return NextResponse.json(
         { error: "Token inválido ou expirado" },
         { status: 401 }
       );
     }
+    const userIdFromJwt = decodedToken.userId; // Extrair userId
     
-    // Verificar se o refresh token existe no banco de dados
-    const { data: tokenData, error: tokenError } = await supabase
-      .from("crmonefactory.refresh_tokens")
-      .select("*")
-      .eq("token", refreshToken)
-      .eq("user_id", userId)
-      .single();
-    
-    if (tokenError || !tokenData) {
+    connection = await getDbConnection();
+    console.log("Verificando refresh token no banco de dados MySQL");
+    const [tokenRows]: any = await connection.execute(
+      'SELECT user_id, expires_at, is_revoked FROM refresh_tokens WHERE token = ? AND user_id = ?',
+      [refreshTokenFromCookie, userIdFromJwt]
+    );
+
+    if (tokenRows.length === 0) {
+      console.log("Refresh token não encontrado no DB ou não corresponde ao usuário JWT");
       return NextResponse.json(
         { error: "Token revogado ou inválido" },
         { status: 401 }
       );
     }
     
-    // Verificar se o token está expirado
+    const tokenData = tokenRows[0];
+    if (tokenData.is_revoked) {
+      console.log("Refresh token está revogado");
+      return NextResponse.json(
+        { error: "Token revogado" },
+        { status: 401 }
+      );
+    }
+
     if (new Date(tokenData.expires_at) < new Date()) {
+      console.log("Refresh token expirado (de acordo com DB)");
       return NextResponse.json(
         { error: "Token expirado" },
         { status: 401 }
       );
     }
     
-    // Obter detalhes do usuário
-    const { data: user, error: userError } = await supabase
-      .from("crmonefactory.users")
-      .select("id, name, email, role, avatar_url")
-      .eq("id", userId)
-      .single();
+    console.log("Obtendo detalhes do usuário do MySQL:", userIdFromJwt);
+    const [userRows]: any = await connection.execute(
+      'SELECT id, name, email, role, avatar_url FROM users WHERE id = ?',
+      [userIdFromJwt] // Usar o userId do JWT que foi validado contra o token no DB
+    );
     
-    if (userError || !user) {
+    if (userRows.length === 0) {
+      console.log("Usuário associado ao refresh token não encontrado");
       return NextResponse.json(
         { error: "Usuário não encontrado" },
-        { status: 404 }
+        { status: 401 } // 401 porque o token é válido mas o usuário não existe mais
       );
     }
+    const user = userRows[0];
     
-    // Gerar novo access token
+    console.log("Gerando novo access token");
     const accessToken = generateAccessToken({
-      userId: user.id,
+      userId: user.id, // Usar user.id do DB para consistência
       email: user.email,
       role: user.role
     });
     
-    // Configurar resposta
     const response = NextResponse.json(
       { 
         message: "Token atualizado com sucesso",
@@ -83,7 +96,6 @@ export async function GET(request: NextRequest) {
       { status: 200 }
     );
     
-    // Configurar cookie de access token
     response.cookies.set({
       name: "accessToken",
       value: accessToken,
@@ -94,12 +106,23 @@ export async function GET(request: NextRequest) {
       path: "/",
     });
     
+    console.log("Novo access token enviado com sucesso");
     return response;
-  } catch (error) {
-    console.error("Erro durante refresh do token:", error);
+
+  } catch (error: any) {
+    console.error("Erro durante refresh do token com MySQL:", error);
     return NextResponse.json(
-      { error: "Erro interno do servidor" },
+      { error: "Erro interno do servidor", details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada (refresh token).");
+      } catch (releaseError) {
+        console.error("Erro ao liberar conexão MySQL (refresh token):", releaseError);
+      }
+    }
   }
 }

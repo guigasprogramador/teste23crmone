@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { crmonefactory } from "@/lib/supabase/client";
+import { getDbConnection } from '@/lib/mysql/client'; // query function not strictly needed if building manually
+import { v4 as uuidv4 } from 'uuid';
 
 // Adicione cabeçalhos CORS para garantir que a API funcione corretamente
 function corsHeaders() {
@@ -12,8 +13,9 @@ function corsHeaders() {
 }
 
 export async function POST(request: NextRequest) {
+  let connection;
   try {
-    console.log("POST /api/auth/register - Iniciando processo de registro");
+    console.log("POST /api/auth/register - Iniciando processo de registro com MySQL");
     const { name, email, password, role = "user" } = await request.json();
 
     // Validação básica
@@ -23,50 +25,26 @@ export async function POST(request: NextRequest) {
         JSON.stringify({ error: "Nome, email e senha são obrigatórios" }),
         { 
           status: 400,
-          headers: {
-            "Content-Type": "application/json",
-            ...corsHeaders()
-          }
+          headers: { "Content-Type": "application/json", ...corsHeaders() }
         }
       );
     }
 
-    console.log("Verificando se email já existe:", email);
-    // Verificar se o email já está em uso - usando o client específico para o schema
-    const { data: existingUser, error: checkError } = await crmonefactory
-      .from("users")
-      .select("id")
-      .eq("email", email)
-      .single();
+    connection = await getDbConnection();
 
-    if (checkError) {
-      console.log("Erro ao verificar email:", checkError);
-      // Normalmente seria um erro, mas pode ser apenas que o usuário não existe, o que é o que queremos
-      // Vamos continuar se o erro for "not found"
-      if (checkError.code !== 'PGRST116') { // Código do erro "not found"
-        return new NextResponse(
-          JSON.stringify({ error: "Erro ao verificar email", details: checkError }),
-          { 
-            status: 500,
-            headers: {
-              "Content-Type": "application/json",
-              ...corsHeaders()
-            }
-          }
-        );
-      }
-    }
+    console.log("Verificando se email já existe no MySQL:", email);
+    const [existingUserRows]: any = await connection.execute(
+      'SELECT id FROM users WHERE email = ?',
+      [email]
+    );
 
-    if (existingUser) {
-      console.log("Email já em uso:", email);
+    if (existingUserRows.length > 0) {
+      console.log("Email já em uso no MySQL:", email);
       return new NextResponse(
         JSON.stringify({ error: "Este email já está em uso" }),
         { 
           status: 400,
-          headers: {
-            "Content-Type": "application/json",
-            ...corsHeaders()
-          }
+          headers: { "Content-Type": "application/json", ...corsHeaders() }
         }
       );
     }
@@ -75,99 +53,80 @@ export async function POST(request: NextRequest) {
     console.log("Gerando hash da senha");
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
+    const newUserId = uuidv4();
 
-    console.log("Criando novo usuário:", { name, email, role });
-    // Criar usuário - usando o client específico para o schema
-    const { data: newUser, error } = await crmonefactory
-      .from("users")
-      .insert({
-        name,
-        email,
-        password: hashedPassword,
-        role,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .select("id, name, email, role")
-      .single();
+    // Iniciar transação
+    await connection.beginTransaction();
+    console.log("Transação iniciada para novo usuário:", newUserId);
 
-    if (error) {
-      console.error("Erro ao criar usuário (detalhado):", {
-        mensagem: error.message,
-        código: error.code,
-        detalhes: error.details,
-        hint: error.hint,
-        erro_completo: JSON.stringify(error)
-      });
-      return new NextResponse(
-        JSON.stringify({ 
-          error: "Erro ao criar usuário", 
-          details: error.message,
-          code: error.code
-        }),
-        { 
-          status: 500,
-          headers: {
-            "Content-Type": "application/json",
-            ...corsHeaders()
-          }
-        }
-      );
-    }
+    // Criar usuário
+    console.log("Criando novo usuário no MySQL:", { name, email, role });
+    await connection.execute(
+      'INSERT INTO users (id, name, email, password, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())',
+      [newUserId, name, email, hashedPassword, role]
+    );
 
-    console.log("Criando perfil do usuário para:", newUser.id);
-    // Criar perfil do usuário - usando o client específico para o schema
-    await crmonefactory
-      .from("user_profiles")
-      .insert({
-        user_id: newUser.id,
-        created_at: new Date().toISOString(),
-      });
+    // Criar perfil do usuário
+    const newUserProfileId = uuidv4();
+    console.log("Criando perfil do usuário no MySQL para:", newUserId);
+    await connection.execute(
+      'INSERT INTO user_profiles (id, user_id, created_at, updated_at) VALUES (?, ?, NOW(), NOW())',
+      [newUserProfileId, newUserId]
+    );
 
-    console.log("Criando preferências do usuário para:", newUser.id);
-    // Criar preferências do usuário - usando o client específico para o schema
-    await crmonefactory
-      .from("user_preferences")
-      .insert({
-        user_id: newUser.id,
-        email_notifications: true,
-        sms_notifications: false,
-        theme: "light",
-        created_at: new Date().toISOString(),
-      });
+    // Criar preferências do usuário
+    const newUserPreferencesId = uuidv4();
+    console.log("Criando preferências do usuário no MySQL para:", newUserId);
+    await connection.execute(
+      'INSERT INTO user_preferences (id, user_id, email_notifications, sms_notifications, theme, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())',
+      [newUserPreferencesId, newUserId, true, false, 'light']
+    );
 
-    // Configurar resposta
+    // Commit da transação
+    await connection.commit();
+    console.log("Transação commitada com sucesso para usuário:", newUserId);
+
     const response = new NextResponse(
       JSON.stringify({
         message: "Usuário criado com sucesso",
-        user: {
-          id: newUser.id,
-          name: newUser.name,
-          email: newUser.email,
-          role: newUser.role,
-        },
+        user: { id: newUserId, name, email, role },
       }),
       { 
         status: 201,
-        headers: {
-          "Content-Type": "application/json",
-          ...corsHeaders()
-        }
+        headers: { "Content-Type": "application/json", ...corsHeaders() }
       }
     );
-
     return response;
-  } catch (error) {
-    console.error("Erro não tratado durante o registro:", error);
+
+  } catch (error: any) {
+    console.error("Erro durante o registro com MySQL:", error);
+    if (connection) {
+      try {
+        await connection.rollback();
+        console.log("Transação revertida (rollback) devido a erro.");
+      } catch (rollbackError) {
+        console.error("Erro ao tentar reverter transação (rollback):", rollbackError);
+      }
+    }
     return new NextResponse(
-      JSON.stringify({ error: "Erro interno do servidor", details: String(error) }),
+      JSON.stringify({
+        error: "Erro interno do servidor ao registrar usuário",
+        details: error.message,
+        code: error.code
+      }),
       { 
         status: 500,
-        headers: {
-          "Content-Type": "application/json",
-          ...corsHeaders()
-        }
+        headers: { "Content-Type": "application/json", ...corsHeaders() }
       }
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada.");
+      } catch (releaseError) {
+        console.error("Erro ao liberar conexão MySQL:", releaseError);
+      }
+    }
   }
 }

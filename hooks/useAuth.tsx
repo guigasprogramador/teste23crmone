@@ -1,8 +1,10 @@
 "use client";
 
+"use client";
+
 import React, { createContext, useState, useContext, useEffect, ReactNode } from "react";
 import { toast } from "sonner";
-import { supabase, crmonefactory } from "@/lib/supabase/client";
+// import { supabase, crmonefactory } from "@/lib/supabase/client"; // Supabase client removed
 import { useRouter } from "next/navigation";
 
 // Definir interface para o usuário
@@ -21,7 +23,7 @@ interface AuthContextType {
   loading: boolean;
   register: (name: string, email: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
-  loginWithMicrosoft: () => Promise<void>;
+  // loginWithMicrosoft: () => Promise<void>; // Microsoft login removed
   logout: () => Promise<void>;
   refreshToken: () => Promise<void>;
 }
@@ -177,27 +179,29 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
-  // Login com Microsoft
-  const loginWithMicrosoft = async (): Promise<void> => {
-    try {
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'azure',
-        options: {
-          scopes: 'email profile openid',
-          redirectTo: `${window.location.origin}/auth/callback`
-        }
-      });
+  // Login com Microsoft - REMOVED / COMMENTED OUT
+  // const loginWithMicrosoft = async (): Promise<void> => {
+  //   try {
+  //     // const { data, error } = await supabase.auth.signInWithOAuth({ // Supabase call
+  //     //   provider: 'azure',
+  //     //   options: {
+  //     //     scopes: 'email profile openid',
+  //     //     redirectTo: `${window.location.origin}/auth/callback`
+  //     //   }
+  //     // });
 
-      if (error) throw error;
+  //     // if (error) throw error;
       
-      if (data.url) {
-        window.location.href = data.url;
-      }
-    } catch (error) {
-      console.error("Erro durante login com Microsoft:", error);
-      toast.error("Erro durante login com Microsoft: " + (error instanceof Error ? error.message : String(error)));
-    }
-  };
+  //     // if (data.url) {
+  //     //   window.location.href = data.url;
+  //     // }
+  //     console.warn("Login com Microsoft não está mais disponível após a refatoração.");
+  //     toast.info("Login com Microsoft não está mais disponível.");
+  //   } catch (error) {
+  //     console.error("Erro durante login com Microsoft:", error);
+  //     toast.error("Erro durante login com Microsoft: " + (error instanceof Error ? error.message : String(error)));
+  //   }
+  // };
 
   // Logout
   const logout = async (): Promise<void> => {
@@ -236,7 +240,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     loading,
     register,
     login,
-    loginWithMicrosoft,
+    // loginWithMicrosoft, // Microsoft login removed
     logout,
     refreshToken
   };
