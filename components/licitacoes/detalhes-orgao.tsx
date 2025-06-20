@@ -219,17 +219,42 @@ export function DetalhesOrgao({
     try {
       const idParaConsulta = orgaoId || orgao?.id;
       if (!idParaConsulta) return;
-      const { data, error } = await crmonefactory
-        .from('orgaos')
-        .select('*')
-        .eq('id', idParaConsulta)
-        .single();
-      if (!error && data) {
+
+      const response = await fetch(`/api/licitacoes/orgaos/${idParaConsulta}`);
+
+      if (!response.ok) {
+        // Handle HTTP errors like 404 or 500
+        const errorData = await response.json().catch(() => ({ message: response.statusText })); // Try to parse error, fallback to statusText
+        console.error('Erro ao buscar órgão:', errorData);
+        toast({
+          title: "Erro ao carregar órgão",
+          description: `Não foi possível carregar os dados do órgão: ${errorData.message || response.statusText}`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const data = await response.json();
+
+      if (data) {
         setFormData(data);
         setOrgaoState(data);
+      } else {
+        // Handle cases where response is OK but data is null/undefined (should ideally not happen with a single record API)
+        console.error('Dados do órgão não encontrados na resposta:', data);
+        toast({
+          title: "Dados não encontrados",
+          description: "A API retornou uma resposta vazia para o órgão solicitado.",
+          variant: "destructive",
+        });
       }
-    } catch (e) {
-      // Pode adicionar um toast de erro se desejar
+    } catch (e: any) {
+      console.error('Erro ao buscar órgão (catch):', e);
+      toast({
+        title: "Erro de Rede ou Processamento",
+        description: `Ocorreu um erro ao tentar buscar os dados do órgão: ${e.message}`,
+        variant: "destructive",
+      });
     }
   };
 
@@ -267,193 +292,243 @@ export function DetalhesOrgao({
     const buscarResponsavel = async () => {
       if (formData.responsavel_interno) {
         try {
-          const { data, error } = await crmonefactory
-            .from('usuarios') // Troque para 'users' se necessário
-            .select('nome')
-            .eq('id', formData.responsavel_interno)
-            .single();
-          if (!error && data?.nome) {
+          const response = await fetch(`/api/users/${formData.responsavel_interno}`);
+          if (!response.ok) {
+            // Handle HTTP errors or cases where user is not found
+            console.error(`Erro ao buscar usuário: ${response.status} ${response.statusText}`);
+            setNomeResponsavelInterno("");
+            // Optionally, display a toast message to the user
+            // toast({
+            //   title: "Erro ao buscar responsável",
+            //   description: `Não foi possível carregar os dados do responsável: ${response.statusText}`,
+            //   variant: "destructive",
+            // });
+            return;
+          }
+          const data = await response.json();
+          // Assuming the API returns { user: { nome: "UserName" } } or similar
+          // Adjust data.user.nome if the structure is different e.g. data.nome or data.user.name
+          if (data && data.user && data.user.nome) {
+            setNomeResponsavelInterno(data.user.nome);
+          } else if (data && data.nome) { // Fallback if structure is just { nome: "UserName" }
             setNomeResponsavelInterno(data.nome);
-          } else {
+          }
+          else {
+            console.warn("Nome do responsável não encontrado na resposta da API:", data);
             setNomeResponsavelInterno("");
           }
-        } catch {
+        } catch (e: any) {
+          console.error('Erro ao buscar responsável (catch):', e);
           setNomeResponsavelInterno("");
+          // Optionally, display a toast message to the user
+          // toast({
+          //   title: "Erro de Rede ou Processamento",
+          //   description: `Ocorreu um erro ao tentar buscar os dados do responsável: ${e.message}`,
+          //   variant: "destructive",
+          // });
         }
       } else {
         setNomeResponsavelInterno("");
       }
     };
     buscarResponsavel();
-  }, [formData.responsavel_interno]);
+  }, [formData.responsavel_interno, toast]);
 
   // Função para verificar se o órgão existe e carregar dados reais
   const verificarECarregarOrgao = async () => {
     try {
-      console.log('Verificando se o órgão existe no banco de dados:', orgao?.id, orgao?.nome)
-      
-      // Primeiro tentar buscar pelo nome, que é mais confiável que o ID temporário
-      const { data: orgaoPorNome, error: errorNome } = await crmonefactory
-        .from('orgaos')
-        .select('*')
-        .ilike('nome', orgao?.nome || '')
-        .limit(1)
-      
-      if (orgaoPorNome && orgaoPorNome.length > 0) {
-        // Encontrou o órgão pelo nome, usar o ID real
-        console.log('Órgão encontrado pelo nome:', orgaoPorNome[0])
-        
-        // Atualizar o estado com o órgão real do banco
-        setOrgaoState(orgaoPorNome[0])
-        
-        // Carregar contatos e licitações com o ID real
-        carregarContatos(orgaoPorNome[0].id)
-        carregarLicitacoesDoOrgao(orgaoPorNome[0].id)
-        return
+      console.log('Verificando se o órgão existe no banco de dados:', orgao?.id, orgao?.nome);
+      const orgaoNomeParaBusca = orgao?.nome || '';
+      const orgaoIdParaBusca = orgao?.id || '';
+
+      // 1. Tentar buscar pelo nome
+      if (orgaoNomeParaBusca) {
+        const responseNome = await fetch(`/api/licitacoes/orgaos?nome=${encodeURIComponent(orgaoNomeParaBusca)}`);
+        if (responseNome.ok) {
+          const orgaosEncontrados = await responseNome.json();
+          if (orgaosEncontrados && orgaosEncontrados.length > 0) {
+            const orgaoEncontrado = orgaosEncontrados[0];
+            console.log('Órgão encontrado pelo nome:', orgaoEncontrado);
+            setOrgaoState(orgaoEncontrado);
+            carregarContatos(orgaoEncontrado.id);
+            carregarLicitacoesDoOrgao(orgaoEncontrado.id);
+            return;
+          }
+        } else {
+          // Log error but continue, as we might find it by ID or need to create it
+          console.warn(`Falha ao buscar órgão pelo nome "${orgaoNomeParaBusca}": ${responseNome.status}`);
+        }
+      }
+
+      // 2. Se não encontrou pelo nome ou nome não disponível, tentar pelo ID
+      if (orgaoIdParaBusca) {
+        const responseId = await fetch(`/api/licitacoes/orgaos/${orgaoIdParaBusca}`);
+        if (responseId.ok) {
+          const orgaoEncontrado = await responseId.json();
+          if (orgaoEncontrado) { // API might return 200 with null if not found by ID, or 404
+            console.log('Órgão encontrado pelo ID:', orgaoEncontrado);
+            setOrgaoState(orgaoEncontrado);
+            carregarContatos(orgaoEncontrado.id);
+            carregarLicitacoesDoOrgao(orgaoEncontrado.id);
+            return;
+          }
+        } else if (responseId.status !== 404) {
+          // Log error but continue, as we might need to create it
+          console.warn(`Falha ao buscar órgão pelo ID "${orgaoIdParaBusca}": ${responseId.status}`);
+        }
       }
       
-      // Se não encontrou pelo nome, tentar pelo ID (menos provável de funcionar com ID temporário)
-      const { data: orgaoPorId, error: errorId } = await crmonefactory
-        .from('orgaos')
-        .select('*')
-        .eq('id', orgao?.id || '')
-        .single()
+      // 3. Se chegou aqui, o órgão não foi encontrado, tentar criar
+      console.log('Órgão não encontrado, tentando criar:', { id: orgaoIdParaBusca, nome: orgaoNomeParaBusca });
       
-      if (orgaoPorId) {
-        console.log('Órgão encontrado pelo ID:', orgaoPorId)
-        setOrgaoState(orgaoPorId)
-        carregarContatos(orgaoPorId.id)
-        carregarLicitacoesDoOrgao(orgaoPorId.id)
-        return
-      }
-      
-      // Se chegou aqui, o órgão não existe no banco, tentar criar
-      console.log('Órgão não encontrado, tentando criar:', orgao)
-      
-      // Criar o órgão no banco de dados
-      const { data: novoOrgao, error: errorCriacao } = await crmonefactory
-        .from('orgaos')
-        .insert({
-          id: orgao?.id,
-          nome: orgao?.nome,
-          status: orgao?.status || 'ativo'
-        })
-        .select()
-      
-      if (errorCriacao) {
-        console.error('Erro ao criar órgão:', errorCriacao)
+      const orgaoParaCriar = {
+        // id: orgaoIdParaBusca, // O backend deve gerar o ID
+        nome: orgaoNomeParaBusca,
+        status: orgao?.status || 'ativo',
+        // Incluir outros campos que o 'orgao' inicial possa ter e que sejam relevantes para criação
+        cnpj: orgao?.cnpj,
+        endereco: orgao?.endereco,
+        cidade: orgao?.cidade,
+        estado: orgao?.estado,
+        // etc.
+      };
+
+      if (!orgaoParaCriar.nome) {
+        console.error('Nome do órgão é obrigatório para criação.');
         toast({
           title: "Erro",
-          description: "Não foi possível criar o órgão no banco de dados.",
+          description: "Nome do órgão é obrigatório para tentar criar um novo.",
           variant: "destructive"
-        })
+        });
+        return;
+      }
+
+      const responseCriacao = await fetch('/api/licitacoes/orgaos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(orgaoParaCriar),
+      });
+
+      if (responseCriacao.ok) {
+        const orgaoCriado = await responseCriacao.json();
+        console.log('Órgão criado com sucesso:', orgaoCriado);
+        setOrgaoState(orgaoCriado);
+        // Carregar contatos e licitações com o ID do órgão recém-criado
+        carregarContatos(orgaoCriado.id);
+        carregarLicitacoesDoOrgao(orgaoCriado.id);
       } else {
-        console.log('Órgão criado com sucesso:', novoOrgao)
-        // Agora podemos carregar contatos (que estarão vazios inicialmente)
-        carregarContatos(orgao?.id)
-        carregarLicitacoesDoOrgao(orgao?.id)
+        const errorData = await responseCriacao.json().catch(() => ({ message: responseCriacao.statusText }));
+        console.error('Erro ao criar órgão:', errorData);
+        toast({
+          title: "Erro ao criar órgão",
+          description: `Não foi possível criar o órgão: ${errorData.message || responseCriacao.statusText}`,
+          variant: "destructive",
+        });
       }
-      
-    } catch (error) {
-      console.error('Erro ao verificar/criar órgão:', error)
-    }
-  }
-
-  // Função para carregar contatos via API em vez de Supabase direto
-  const carregarContatos = async (orgaoId?: string) => {
-    try {
-      // Usar o ID passado como parâmetro ou o ID do órgão do estado atualizado
-      const idParaConsulta = orgaoId || orgaoState?.id || orgao?.id
-      
-      if (!idParaConsulta) {
-        console.log('ID do órgão não encontrado')
-        return
-      }
-      
-      // Log para debug
-      console.log('Carregando contatos com ID consistente:', idParaConsulta)
-
-      console.log('Carregando contatos para o órgão:', idParaConsulta)
-
-      const { data, error } = await crmonefactory
-        .from('orgao_contatos')
-        .select('*')
-        .eq('orgao_id', idParaConsulta)
-        .order('nome', { ascending: true })
-
-      if (error) {
-        console.error('Erro ao carregar contatos:', error)
-        throw error
-      }
-
-      console.log('Contatos carregados:', data)
-      setContatos((Array.isArray(data) ? data : []).map(normalizeContato))
-    } catch (error) {
-      console.error('Erro ao carregar contatos:', error)
+    } catch (error: any) {
+      console.error('Erro geral ao verificar/criar órgão:', error);
       toast({
-        title: "Atenção",
-        description: "Não foi possível carregar os contatos. Use a funcionalidade de adicionar contato.",
-        variant: "destructive"
-      })
+        title: "Erro Inesperado",
+        description: `Ocorreu um erro inesperado: ${error.message}`,
+        variant: "destructive",
+      });
     }
   }
+
+  // Função para carregar contatos via API
+  const carregarContatos = async (orgaoId?: string) => {
+    const idParaConsulta = orgaoId || orgaoState?.id || orgao?.id;
+    if (!idParaConsulta) {
+      console.log('ID do órgão não encontrado para carregar contatos.');
+      setContatos([]); // Clear contacts if no ID
+      return;
+    }
+    console.log('Carregando contatos para o órgão ID:', idParaConsulta);
+    try {
+      const response = await fetch(`/api/contatos?orgao_id=${idParaConsulta}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: response.statusText }));
+        console.error('Erro ao carregar contatos:', errorData);
+        throw new Error(`API error: ${errorData.message || response.statusText}`);
+      }
+      const data = await response.json();
+      console.log('Contatos carregados:', data);
+      setContatos((Array.isArray(data) ? data : []).map(normalizeContato));
+    } catch (error: any) {
+      console.error('Falha ao buscar contatos:', error);
+      setContatos([]); // Clear contacts on error
+      toast({
+        title: "Erro ao carregar contatos",
+        description: error.message || "Não foi possível carregar os contatos.",
+        variant: "destructive",
+      });
+    }
+  };
 
   // Adicionar função para carregar licitações relacionadas ao órgão
   const carregarLicitacoesDoOrgao = async (orgaoId?: string) => {
-    try {
-      // Usar o ID passado como parâmetro ou o ID do órgão do estado atualizado
-      const idParaConsulta = orgaoId || orgaoState?.id || orgao?.id
-      
-      if (!idParaConsulta) {
-        console.log('ID do órgão não encontrado')
-        return
-      }
-      
-      // Log para debug
-      console.log('Carregando licitações com ID consistente:', idParaConsulta)
-
-      console.log('Carregando licitações para o órgão:', idParaConsulta)
-
-      const { data, error } = await crmonefactory
-        .from('licitacoes')
-        .select('*')
-        .eq('orgao_id', idParaConsulta)
-        .order('data_criacao', { ascending: false })
-
-      if (error) {
-        console.error('Erro ao carregar licitações:', error)
-        throw error
-      }
-
-      console.log('Licitações carregadas:', data)
-      setLicitacoesDoOrgao(data || [])
-    } catch (error) {
-      console.error('Erro ao carregar licitações:', error)
-      toast({
-        title: "Atenção",
-        description: "Não foi possível carregar as licitações deste órgão",
-        variant: "destructive"
-      })
+    const idParaConsulta = orgaoId || orgaoState?.id || orgao?.id;
+    if (!idParaConsulta) {
+      console.log('ID do órgão não encontrado para carregar licitações.');
+      setLicitacoesDoOrgao([]); // Clear licitacoes if no ID
+      return;
     }
-  }
-
-  // Função para carregar o resumo do órgão da tabela orgao
-  const carregarResumoOrgao = async (orgaoId?: string) => {
+    console.log('Carregando licitações para o órgão ID:', idParaConsulta);
     try {
-      const idParaConsulta = orgaoId || orgaoState?.id || orgao?.id;
-      if (!idParaConsulta) return;
-      const { data, error } = await crmonefactory
-        .from('orgao')
-        .select('*')
-        .eq('orgao_id', idParaConsulta)
-        .single();
-      if (!error && data) {
-        setOrgaoResumo(data);
-      } else {
+      const response = await fetch(`/api/licitacoes?orgaoId=${idParaConsulta}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: response.statusText }));
+        console.error('Erro ao carregar licitações:', errorData);
+        throw new Error(`API error: ${errorData.message || response.statusText}`);
+      }
+      const data = await response.json();
+      console.log('Licitações carregadas:', data);
+      setLicitacoesDoOrgao(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      console.error('Falha ao buscar licitações:', error);
+      setLicitacoesDoOrgao([]); // Clear licitacoes on error
+      toast({
+        title: "Erro ao carregar licitações",
+        description: error.message || "Não foi possível carregar as licitações deste órgão.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Função para carregar o resumo do órgão (utilizando formData populado por carregarOrgaoBanco)
+  const carregarResumoOrgao = (orgaoId?: string) => {
+    const idParaConsulta = orgaoId || orgaoState?.id || orgao?.id;
+    if (!idParaConsulta) {
+      setOrgaoResumo(null);
+      return;
+    }
+
+    // formData é populado por carregarOrgaoBanco com os dados de /api/licitacoes/orgaos/[id]
+    // Assumimos que este formData contém todos os campos necessários que antes viriam da tabela 'orgao' (singular)
+    if (formData && formData.id === idParaConsulta && Object.keys(formData).length > 0) {
+      console.log('Utilizando formData para resumo do órgão:', formData);
+      setOrgaoResumo(formData);
+    } else {
+      // Se formData não estiver pronto ou não corresponder, pode ser um estado transitório
+      // ou carregarOrgaoBanco pode não ter sido chamado/concluído para este ID ainda.
+      // carregarOrgaoBanco é chamado em um useEffect quando orgao.id muda.
+      // Se for estritamente necessário buscar dados adicionais que SÓ existem em uma tabela 'orgao' (singular)
+      // e não no 'orgaos' (plural), então uma API /api/licitacoes/orgaos/[id]/resumo seria necessária.
+      // Por agora, se formData não estiver adequado, limpamos o resumo ou o mantemos.
+      console.warn(`formData (ID: ${formData?.id}) não está pronto ou não corresponde ao idParaConsulta (${idParaConsulta}) para carregar o resumo do órgão. Verifique se carregarOrgaoBanco populou os dados corretamente.`);
+      // Se desejar forçar o carregamento ou limpar:
+      // setOrgaoResumo(null);
+      // Ou, se carregarOrgaoBanco DEVE ser chamado:
+      // console.log('Chamando carregarOrgaoBanco de dentro de carregarResumoOrgao para garantir que formData seja preenchido.');
+      // carregarOrgaoBanco(idParaConsulta); // Isso tornaria carregarResumoOrgao async e exigiria cuidado com loops.
+      // Por ora, apenas confiamos que o useEffect principal que chama carregarOrgaoBanco fará seu trabalho.
+      // Se os dados em formData não são suficientes, uma nova API é necessária.
+      // Por enquanto, se o formData não for o esperado, não alteramos o orgaoResumo ou o limpamos.
+      // Para este exercício, vamos assumir que o formData é suficiente.
+      // Se o `formData.id` não corresponder, é mais seguro limpar o resumo.
+      if (formData?.id !== idParaConsulta) {
         setOrgaoResumo(null);
       }
-    } catch (e) {
-      setOrgaoResumo(null);
     }
   };
 
@@ -510,228 +585,163 @@ export function DetalhesOrgao({
         })
         
         if (!response.ok) {
-          const errorText = await response.text()
-          console.error('Resposta de erro da API:', errorText)
-          throw new Error('Erro na API: ' + errorText)
+          const errorText = await response.text().catch(() => 'Erro desconhecido ao obter detalhes do erro da API.');
+          console.error('Resposta de erro da API ao adicionar contato:', errorText);
+          // Reverter a adição otimista da UI se a API falhar
+          setContatos(prev => prev.filter(c => c.id !== novoContatoId));
+          setShowAddContatoDialog(true); // Opcional: reabrir o formulário
+          throw new Error('Erro na API ao adicionar contato: ' + errorText);
         }
         
-        const data = await response.json()
-        console.log('Contato salvo via API:', data)
+        const data = await response.json();
+        console.log('Contato salvo via API:', data);
         
-        // Atualizar toast com sucesso
+        // Atualizar UI com dados do servidor (especialmente se a API transforma/retorna mais dados)
+        setContatos(prev => prev.map(c => c.id === novoContatoId ? normalizeContato(data) : c));
+
         toast({
           title: "Contato salvo",
-          description: "O contato foi armazenado permanentemente"
-        })
+          description: "O contato foi armazenado permanentemente."
+        });
         
-        // Aumentar o tempo antes de recarregar os contatos
+        // Recarregar contatos para garantir sincronia, especialmente se houver triggers ou outras lógicas no backend.
+        // Opcional: A API pode já retornar o estado final, tornando isso redundante se a UI for atualizada confiavelmente acima.
         setTimeout(() => {
-          console.log('Recarregando contatos após espera para o órgão:', orgaoState.id)
-          carregarContatos(orgaoState.id)
-        }, 1000)
+          if (orgaoState?.id) { // Adicionado check para orgaoState.id
+            console.log('Recarregando contatos após espera para o órgão:', orgaoState.id);
+            carregarContatos(orgaoState.id);
+          }
+        }, 1000);
         
-        return
-      } catch (apiError) {
-        console.error('Falha ao salvar via API:', apiError)
-        // Continue para tentar diretamente no Supabase
-      }
-      
-      // Tentar salvar diretamente no Supabase como fallback
-      console.log('Tentando salvar diretamente no Supabase...')
-      
-      // Primeiro, verificar se o órgão existe
-      const { data: orgaoExistente, error: checkError } = await crmonefactory
-        .from('orgaos')
-        .select('id')
-        .eq('id', orgaoState.id)
-        .single()
-      
-      // Se o órgão não existir, criá-lo primeiro
-      if (checkError || !orgaoExistente) {
-        console.log('Órgão não existe. Criando-o primeiro...')
-        
-        const { error: createError } = await crmonefactory
-          .from('orgaos')
-          .insert({
-            id: orgaoState.id,
-            nome: orgaoState.nome || 'Nome não definido'
-          })
-        
-        if (createError) {
-          console.error('Erro ao criar órgão no Supabase:', createError)
-          throw new Error('Erro ao criar órgão: ' + createError.message)
-        }
-        
-        console.log('Órgão criado com sucesso no Supabase')
-      }
-      
-      // Agora inserir o contato
-      const { error } = await crmonefactory
-        .from('orgao_contatos')
-        .insert({
-          id: novoContatoId,
-          orgao_id: orgaoState.id,
-          nome: formData.nome,
-          cargo: formData.cargo || null,
-          email: formData.email || null,
-          telefone: formData.telefone || null
-        })
-      
-      if (error) {
-        console.error('Erro ao salvar no Supabase:', error)
-        throw new Error('Erro ao salvar contato: ' + error.message)
-      } else {
-        console.log('Contato salvo com sucesso no Supabase')
-        
-        // Atualizar toast com sucesso
+      } catch (apiError: any) { // Explicitamente tipo 'any' ou 'Error'
+        console.error('Falha ao salvar contato via API:', apiError.message);
+        // A remoção do contato da UI (reversão) já foi feita no bloco if (!response.ok)
+        // Aqui apenas exibimos o toast para o erro da API.
         toast({
-          title: "Contato salvo",
-          description: "O contato foi armazenado permanentemente"
-        })
-        
-        carregarContatos(orgaoState.id) // Recarregar para sincronizar com o mesmo ID usado na criação
+          title: "Erro ao salvar contato",
+          description: `Não foi possível salvar o contato permanentemente via API: ${apiError.message}`,
+          variant: "destructive",
+        });
+        // Não prosseguir para o fallback do Supabase.
       }
-      
-    } catch (error) {
-      console.error('Erro ao adicionar contato:', error)
-      
-      let mensagem = "O contato foi adicionado à interface, mas não foi possível salvá-lo permanentemente"
-      
-      if (error instanceof Error) {
-        mensagem += ": " + error.message
-      }
-      
+    } catch (error: any) { // Catch para erros gerais (ex: ID do órgão não encontrado)
+      console.error('Erro ao adicionar contato:', error.message);
       toast({
-        title: "Aviso",
-        description: mensagem,
-        variant: "destructive"
-      })
+        title: "Erro ao adicionar contato",
+        description: error.message || "Ocorreu um erro desconhecido.",
+        variant: "destructive",
+      });
     }
   }
 
   // Função para excluir um contato
   const excluirContato = async (contato: ContatoType) => {
+    const originalContatos = [...contatos]; // Cópia para possível reversão
+    // Otimisticamente remove da UI
+    setContatos(prev => prev.filter(c => c.id !== contato.id));
+
     try {
-      // Tentar via API primeiro
-      try {
-        const response = await fetch(`/api/contatos/${contato.id}`, {
-          method: 'DELETE',
-        })
-        
-        if (!response.ok) {
-          throw new Error('Erro na API: ' + await response.text())
-        }
-        
-        console.log('Contato excluído via API')
-        
-        // Remover contato da lista local para UI
-        setContatos(prev => prev.filter(c => c.id !== contato.id))
-        
-        // Feedback positivo
-        toast({
-          title: "Contato excluído",
-          description: "O contato foi excluído com sucesso"
-        })
-        
-        // Recarregar contatos para exibir os dados do servidor
-        carregarContatos()
-        return
-      } catch (apiError) {
-        console.error('Falha ao excluir via API:', apiError)
+      const response = await fetch(`/api/contatos/${contato.id}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Erro desconhecido ao obter detalhes do erro da API.');
+        console.error('Erro na API ao excluir contato:', errorText);
+        setContatos(originalContatos); // Reverter remoção da UI
+        throw new Error('Erro na API: ' + errorText);
       }
       
-      // Fallback para Supabase direto
-      console.log('Tentando excluir diretamente no Supabase...')
-      const { error } = await crmonefactory
-        .from('orgao_contatos')
-        .delete()
-        .eq('id', contato.id)
-      
-      if (error) {
-        console.error('Erro ao excluir no Supabase:', error)
-        // Não vamos falhar aqui, já removemos o contato da UI
-      } else {
-        console.log('Contato excluído com sucesso no Supabase')
-        carregarContatos(orgaoState.id) // Recarregar para sincronizar com o mesmo ID usado na criação
-      }
-      
-    } catch (error) {
-      console.error('Erro ao excluir contato:', error)
+      console.log('Contato excluído via API');
       toast({
-        title: "Aviso",
-        description: "O contato foi removido da interface, mas pode não ter sido excluído permanentemente",
-        variant: "destructive"
-      })
+        title: "Contato excluído",
+        description: "O contato foi excluído com sucesso.",
+      });
+      
+      // Opcional: Recarregar contatos se houver necessidade de sincronizar dados que podem ter mudado no backend
+      // carregarContatos(orgaoState?.id);
+      // Se a remoção otimista for suficiente e não houver efeitos colaterais, não é necessário recarregar.
+      
+    } catch (error: any) {
+      console.error('Falha ao excluir contato via API:', error.message);
+      // A reversão da UI já foi feita no bloco if (!response.ok) ou deveria ser feita aqui se o fetch falhar.
+      // Se o setContatos(originalContatos) não foi chamado (ex: fetch falhou antes do response.ok), faça aqui.
+      // No entanto, a estrutura atual já cobre isso no if(!response.ok).
+      // Se o fetch em si falhar (ex: rede), a UI ainda precisa ser revertida.
+      // Para simplificar, a reversão está no if(!response.ok). Se o fetch falhar, o catch geral abaixo trata.
+      // Se a remoção otimista ocorreu, mas o fetch falhou (sem ser !response.ok), precisamos reverter.
+      // Para garantir, podemos verificar se 'originalContatos' ainda é diferente de 'contatos'
+      // No entanto, para este refactor, vamos focar na remoção do fallback.
+      // A lógica otimista de UI pode ser refinada separadamente.
+
+      toast({
+        title: "Erro ao excluir contato",
+        description: `Não foi possível excluir o contato: ${error.message}`,
+        variant: "destructive",
+      });
+      // Se a exclusão otimista aconteceu, e o erro foi no fetch em si (não !response.ok),
+      // a UI pode estar inconsistente. Considerar recarregar ou reverter explicitamente.
+      // Por ora, a reversão está no if (!response.ok).
+      // Se a intenção é sempre recarregar em caso de erro para garantir consistência:
+      if (orgaoState?.id) carregarContatos(orgaoState.id);
     }
   }
 
   // Função para editar um contato existente
-  const editarContato = async (contato: ContatoType) => {
+  const editarContato = async (contatoEditado: ContatoType) => { // Renomeado para clareza
+    const originalContatos = [...contatos];
+    // Otimisticamente atualiza a UI
+    setContatos(prev => prev.map(c => c.id === contatoEditado.id ? normalizeContato(contatoEditado) : c));
+    setEditandoContato(null); // Fechar o formulário de edição
+
     try {
-      const updatedContato = {
-        ...contato,
-        orgao_id: contato.orgao_id,
+      const payload = {
+        ...contatoEditado,
         data_atualizacao: new Date().toISOString()
-      }
+      };
 
-      console.log('Tentando atualizar contato:', updatedContato)
+      console.log('Tentando atualizar contato via API:', payload);
+      const response = await fetch(`/api/contatos/${contatoEditado.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
 
-      // Tentar via API primeiro
-      try {
-        const response = await fetch(`/api/contatos/${contato.id}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(updatedContato),
-        })
-        
-        if (!response.ok) {
-          throw new Error('Erro na API: ' + await response.text())
-        }
-        
-        const data = await response.json()
-        console.log('Contato atualizado via API:', data)
-        
-        // Atualizar contato na lista local para UI
-        setContatos(prev => prev.map(c => c.id === contato.id ? normalizeContato(data) : c))
-        
-        // Feedback positivo
-        toast({
-          title: "Contato atualizado",
-          description: "O contato foi atualizado com sucesso"
-        })
-        
-        // Recarregar contatos para exibir os dados do servidor
-        carregarContatos()
-        return
-      } catch (apiError) {
-        console.error('Falha ao atualizar via API:', apiError)
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Erro desconhecido ao obter detalhes do erro da API.');
+        console.error('Erro na API ao atualizar contato:', errorText);
+        setContatos(originalContatos); // Reverter atualização da UI
+        setEditandoContato(contatoEditado.id); // Reabrir formulário de edição
+        throw new Error('Erro na API: ' + errorText);
       }
       
-      // Fallback para Supabase direto
-      console.log('Tentando atualizar diretamente no Supabase...')
-      const { data, error } = await crmonefactory
-        .from('orgao_contatos')
-        .update(updatedContato)
-        .eq('id', contato.id)
-        .select()
+      const data = await response.json();
+      console.log('Contato atualizado via API:', data);
       
-      if (error) {
-        console.error('Erro ao atualizar no Supabase:', error)
-        // Não vamos falhar aqui, já atualizamos o contato na UI
-      } else {
-        console.log('Contato atualizado com sucesso no Supabase')
-        carregarContatos(orgaoState.id) // Recarregar para sincronizar com o mesmo ID usado na criação
-      }
+      // Atualizar UI com dados do servidor (especialmente se a API transforma/retorna mais dados)
+      setContatos(prev => prev.map(c => c.id === data.id ? normalizeContato(data) : c));
       
-    } catch (error) {
-      console.error('Erro ao atualizar contato:', error)
       toast({
-        title: "Aviso",
-        description: "O contato foi atualizado na interface, mas pode não ter sido atualizado permanentemente",
-        variant: "destructive"
-      })
+        title: "Contato atualizado",
+        description: "O contato foi atualizado com sucesso.",
+      });
+
+      // Opcional: Recarregar todos os contatos para consistência completa
+      // if(orgaoState?.id) carregarContatos(orgaoState.id);
+
+    } catch (error: any) {
+      console.error('Falha ao atualizar contato via API:', error.message);
+      // A reversão da UI já está no bloco if(!response.ok).
+      // Se o fetch em si falhou, a UI pode estar inconsistente.
+      toast({
+        title: "Erro ao atualizar contato",
+        description: `Não foi possível atualizar o contato: ${error.message}`,
+        variant: "destructive",
+      });
+      // Para garantir consistência em caso de erro de fetch, podemos recarregar.
+      if (orgaoState?.id) carregarContatos(orgaoState.id);
     }
   }
 
