@@ -366,6 +366,9 @@ export function useDocuments() {
           return data.documento;
         }
         return null; // Ou lançar erro se data.documento não existir
+      } catch (metadataError: any) {
+        console.error('Erro ao atualizar apenas os metadados do documento:', metadataError);
+        throw metadataError; // Re-throw para ser pego pelo catch externo
       }
     } catch (err: any) {
       console.error('Erro ao atualizar documento:', err);
@@ -374,7 +377,7 @@ export function useDocuments() {
     } finally {
       setLoading(false);
     }
-  }, [fetchDocumentById, uploadDocument]);
+  }, [fetchDocumentById, uploadDocument, deleteDocument]);
 
   // Excluir um documento
   const deleteDocument = useCallback(async (id: string, fisicamente: boolean = false) => {

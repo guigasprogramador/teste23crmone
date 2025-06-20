@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/components/ui/use-toast"
-import { crmonefactory } from "@/lib/supabase"
 import { v4 as uuidv4 } from "uuid"
 import { Upload, FileText, Search, Check } from "lucide-react"
 import { DocumentType, useDocuments } from "@/hooks/useDocuments"
@@ -128,65 +127,130 @@ export function FormularioSimplificadoLicitacao({ onClose, onSuccess }: Formular
     return (bytes / 1048576).toFixed(1) + ' MB'
   }
 
+  const getAuthToken = () => {
+    // In a real app, this might come from a context or a more robust auth solution
+    return localStorage.getItem('accessToken');
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsSubmitting(true)
+    e.preventDefault();
+    setIsSubmitting(true);
+    const token = getAuthToken();
+
+    if (!token) {
+      toast({
+        title: "Erro de Autenticação",
+        description: "Você não está autenticado para realizar esta ação.",
+        variant: "destructive",
+      });
+      setIsSubmitting(false);
+      return;
+    }
+
+    let licitacaoId = "";
 
     try {
-      // Upload dos documentos
-      const documentosUrls: string[] = []
-      for (const documento of formData.documentos) {
-        const fileExt = documento.name.split('.').pop()
-        const fileName = `${uuidv4()}.${fileExt}`
-        const filePath = `licitacoes/${fileName}`
+      // 1. Criar a licitação primeiro (sem os arquivos novos)
+      const licitacaoPayload = {
+        titulo: formData.titulo,
+        orgao: formData.orgao, // Passando nome diretamente, API precisa lidar com isso
+        dataAbertura: formData.dataAbertura,
+        responsavel: formData.responsavel, // Passando nome diretamente
+        status: "analise_interna", // Default status
+        documentos_vinculados: documentosRepositorio.map(doc => doc.id), // IDs de documentos do repositório
+        // O campo 'documentos' (para URLs de novos arquivos) será atualizado implicitamente no backend
+        // ou por uma chamada PATCH subsequente se necessário, após os uploads.
+      };
 
-        const { data: uploadData, error: uploadError } = await crmonefactory.storage
-          .from('documentos')
-          .upload(filePath, documento)
+      console.log("Criando licitação com payload:", licitacaoPayload);
+      const licitacaoResponse = await fetch('/api/licitacoes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(licitacaoPayload),
+      });
 
-        if (uploadError) throw uploadError
-
-        const { data: { publicUrl } } = crmonefactory.storage
-          .from('documentos')
-          .getPublicUrl(filePath)
-
-        documentosUrls.push(publicUrl)
+      if (!licitacaoResponse.ok) {
+        const errorData = await licitacaoResponse.json().catch(() => ({ message: 'Erro ao criar licitação.' }));
+        throw new Error(errorData.error || errorData.message || `HTTP error ${licitacaoResponse.status}`);
       }
 
-      // Criar a licitação
-      const { error } = await crmonefactory
-        .from('licitacoes')
-        .insert([{
-          id: uuidv4(),
-          titulo: formData.titulo,
-          orgao: formData.orgao,
-          data_abertura: formData.dataAbertura,
-          responsavel: formData.responsavel,
-          documentos: documentosUrls,
-          documentos_vinculados: documentosRepositorio.map(doc => doc.id),
-          status: "analise_interna",
-          data_criacao: new Date().toISOString(),
-          data_atualizacao: new Date().toISOString()
-        }])
+      const createdLicitacao = await licitacaoResponse.json();
+      licitacaoId = createdLicitacao.id; // Assumindo que a API retorna o objeto criado com seu ID
 
-      if (error) throw error
+      if (!licitacaoId) {
+        throw new Error("ID da licitação não foi retornado após a criação.");
+      }
+      console.log("Licitação criada com ID:", licitacaoId);
 
+      // 2. Upload dos novos documentos, associando-os à licitação criada
+      if (formData.documentos.length > 0) {
+        console.log(`Iniciando upload de ${formData.documentos.length} documentos...`);
+        for (const file of formData.documentos) {
+          const docFormData = new FormData();
+          docFormData.append('file', file);
+          docFormData.append('licitacaoId', licitacaoId);
+          docFormData.append('nome', file.name); // Usar nome original do arquivo
+          docFormData.append('tipo', 'Anexo Simplificado'); // Tipo genérico para estes arquivos
+          // Adicionar 'uploadPor' se a API /api/documentos/upload esperar
+          // const decodedToken = JSON.parse(atob(token.split('.')[1]));
+          // if (decodedToken && decodedToken.userId) {
+          //   docFormData.append('uploadPor', decodedToken.userId);
+          // }
+
+          try {
+            const docResponse = await fetch('/api/documentos/doc/upload', { // Endpoint de upload de documentos
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                // Content-Type é definido automaticamente pelo browser para FormData
+              },
+              body: docFormData,
+            });
+
+            if (!docResponse.ok) {
+              const errorData = await docResponse.json().catch(() => ({ message: `Falha no upload do arquivo ${file.name}` }));
+              console.error(`Erro ao fazer upload do documento ${file.name}:`, errorData.error || errorData.message);
+              // Continuar tentando outros uploads, mas talvez coletar esses erros
+              toast({
+                title: `Falha no Upload: ${file.name}`,
+                description: errorData.error || errorData.message || "Erro desconhecido.",
+                variant: "destructive",
+              });
+            } else {
+              const uploadedDoc = await docResponse.json();
+              console.log(`Documento ${file.name} enviado com sucesso:`, uploadedDoc);
+            }
+          } catch (uploadError: any) {
+            console.error(`Erro crítico durante o upload do documento ${file.name}:`, uploadError);
+            toast({
+              title: `Erro no Upload: ${file.name}`,
+              description: uploadError.message || "Erro de rede ou inesperado.",
+              variant: "destructive",
+            });
+          }
+        }
+      }
+
+      // 3. Finalização
       toast({
-        title: "Sucesso",
-        description: "Licitação cadastrada com sucesso"
-      })
+        title: "Sucesso!",
+        description: "Licitação cadastrada e documentos enviados.",
+      });
+      onSuccess();
+      onClose();
 
-      onSuccess()
-      onClose()
-    } catch (error) {
-      console.error('Erro ao cadastrar licitação:', error)
+    } catch (error: any) {
+      console.error('Erro geral ao cadastrar licitação:', error);
       toast({
-        title: "Erro",
-        description: "Erro ao cadastrar licitação",
-        variant: "destructive"
-      })
+        title: "Erro ao Cadastrar Licitação",
+        description: error.message || "Não foi possível completar a operação.",
+        variant: "destructive",
+      });
     } finally {
-      setIsSubmitting(false)
+      setIsSubmitting(false);
     }
   }
 

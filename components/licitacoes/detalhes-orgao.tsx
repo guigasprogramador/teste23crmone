@@ -21,7 +21,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { crmonefactory } from '@/lib/supabase'
 import { v4 as uuidv4 } from 'uuid'
 
 interface StatusColors {
@@ -772,48 +771,74 @@ export function DetalhesOrgao({
         });
         return;
       }
-      // Montar objeto apenas com os campos válidos da tabela 'orgaos'
-      const dadosAtualizados: any = {};
-      const camposValidos = [
-        'nome', 'tipo', 'cnpj', 'endereco', 'cidade', 'estado', 'segmento', 'origem_lead',
-        'responsavel_interno', 'descricao', 'observacoes', 'faturamento', 'resumo_detalhado',
-        'palavras_chave', 'ultima_licitacao_data', 'codigo_externo', 'ativo'
+      // Montar objeto com os campos válidos para a API (camelCase)
+      const dadosAtualizados: Partial<Orgao> = {};
+      // Esses campos devem corresponder às chaves em 'formData' (que são camelCase)
+      // e aos campos que a API PUT /api/licitacoes/orgaos/[id] espera.
+      const camelCaseCamposValidos: (keyof Orgao)[] = [
+        'nome', 'tipo', 'cnpj', 'endereco', 'cidade', 'estado', 'segmento', 'origemLead',
+        'responsavelInterno', 'descricao', 'observacoes', 'faturamento',
+        // Adicione aqui outros campos da interface Orgao que são editáveis e aceitos pela API
+        // 'resumoDetalhado', 'palavrasChave', 'ultimaLicitacaoData', 'codigoExterno',
+        'ativo' // 'ativo' é um boolean, a API /api/licitacoes/orgaos/[id] o trata corretamente
       ];
-      camposValidos.forEach((campo) => {
-        if (formData[campo] !== undefined) dadosAtualizados[campo] = formData[campo];
+
+      camelCaseCamposValidos.forEach((campo) => {
+        if (formData[campo] !== undefined) {
+          // Type assertion to satisfy TypeScript, as campo is a keyof Orgao
+          (dadosAtualizados as any)[campo] = formData[campo];
+        }
       });
-      console.log('Payload do update:', dadosAtualizados, 'ID:', orgao.id);
-      // Update no Supabase
-      const { data, error } = await crmonefactory
-        .from('orgaos')
-        .update(dadosAtualizados)
-        .eq('id', orgao.id)
-        .select()
-        .single();
-      if (error) throw error
-      if (data) {
-        setOrgaoState(data);
-        if (onOrgaoUpdate) onOrgaoUpdate(data);
+
+      if (Object.keys(dadosAtualizados).length === 0) {
+        toast({
+          title: 'Nenhuma alteração',
+          description: 'Nenhum dado foi modificado para salvar.',
+          variant: 'default',
+        });
+        setIsEditing(false); // Pode sair do modo de edição se não houver nada a salvar
+        return;
       }
+
+      console.log('Payload do update para API (camelCase):', dadosAtualizados, 'ID:', orgao.id);
+
+      const response = await fetch(`/api/licitacoes/orgaos/${orgao.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dadosAtualizados),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: `Erro HTTP ${response.status}` }));
+        console.error('Erro ao atualizar órgão via API:', errorData);
+        throw new Error(errorData.error || errorData.message || 'Falha ao atualizar órgão');
+      }
+
+      const responseData: Orgao = await response.json();
+
+      setOrgaoState(responseData);
+      if (onOrgaoUpdate) {
+        onOrgaoUpdate(responseData);
+      }
+      // Atualiza formData também para refletir os dados do servidor, especialmente se a API retornar mais campos ou valores transformados
+      setFormData(responseData);
+
+
       toast({
         title: 'Sucesso',
-        description: 'Órgão atualizado com sucesso',
+        description: 'Órgão atualizado com sucesso!',
         variant: 'default',
       });
-      setFormData({});
+      // Não limpar formData aqui se quiser manter os dados visíveis,
+      // mas setOrgaoState e onOrgaoUpdate já devem ter atualizado a fonte de dados principal.
+      // setFormData({}); // Limpar apenas se for sair do modo de edição e quiser um form limpo na próxima vez.
       setIsEditing(false);
-    } catch (error) {
-      // Enhanced error logging
-      console.error('Erro detalhado ao atualizar órgão:', error, typeof error, JSON.stringify(error));
+
+    } catch (error: any) {
+      console.error('Erro detalhado ao atualizar órgão:', error);
       toast({
-        title: 'Erro',
-        description: `Erro ao atualizar órgão: ${
-          error instanceof Error
-            ? error.message
-            : typeof error === 'object'
-              ? JSON.stringify(error)
-              : String(error)
-        }`,
+        title: 'Erro ao Salvar',
+        description: error.message || 'Ocorreu um problema ao tentar salvar as alterações do órgão.',
         variant: 'destructive',
       });
     }
@@ -821,33 +846,51 @@ export function DetalhesOrgao({
 
   const handleExcluirOrgao = async () => {
     try {
-      if (!orgao) return;
+      if (!orgao || !orgao.id) {
+        toast({
+          title: "Erro",
+          description: "ID do órgão não encontrado.",
+          variant: "destructive",
+        });
+        return;
+      }
 
-      const { error } = await crmonefactory
-        .from('orgaos')
-        .delete()
-        .eq('id', orgao.id)
+      const response = await fetch(`/api/licitacoes/orgaos/${orgao.id}`, {
+        method: 'DELETE',
+      });
 
-      if (error) throw error
+      if (!response.ok) {
+        // Try to parse error from API, fallback to status text
+        const errorData = await response.json().catch(() => ({ message: response.statusText }));
+        console.error('Erro ao excluir órgão via API:', errorData);
+        throw new Error(errorData.error || errorData.message || `Falha ao excluir órgão: ${response.status}`);
+      }
+
+      // If API returns 204 No Content, response.json() will fail. Check for that.
+      // For this implementation, the API for DELETE returns a JSON message on 200.
+      // const responseData = response.status === 204 ? {} : await response.json();
+      // console.log('Resposta da API ao excluir órgão:', responseData);
+
 
       if (onOrgaoDelete) {
-        onOrgaoDelete(orgao)
+        onOrgaoDelete(orgao); // Pass the original orgao object
       }
 
       toast({
         title: "Sucesso",
-        description: "Órgão excluído com sucesso",
-        variant: "default"
-      })
+        description: "Órgão excluído com sucesso!",
+        variant: "default",
+      });
 
-      onOpenChange(false)
-    } catch (error) {
-      console.error('Erro ao excluir órgão:', error)
+      onOpenChange(false); // Close the sheet/dialog
+
+    } catch (error: any) {
+      console.error('Erro ao excluir órgão:', error);
       toast({
-        title: "Erro",
-        description: "Erro ao excluir órgão",
-        variant: "destructive"
-      })
+        title: "Erro ao Excluir",
+        description: error.message || "Ocorreu um problema ao tentar excluir o órgão.",
+        variant: "destructive",
+      });
     }
   }
 
