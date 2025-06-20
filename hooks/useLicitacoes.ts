@@ -136,7 +136,7 @@ export function useLicitacoes() {
           // Verificar formato da resposta da API
           console.log('Resposta da API:', data);
           
-          const data = await response.json();
+          // A linha const data = await response.json(); foi removida daqui por ser redundante
 
           // Verificar formato da resposta da API
           console.log('Resposta da API (fetchLicitacoes):', data);
