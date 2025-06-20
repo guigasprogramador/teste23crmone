@@ -1,43 +1,50 @@
 import { useState, useCallback } from 'react';
 
-// Interfaces para documentos
+// Interfaces para documentos (Atualizadas para MySQL API)
 export interface DocumentType {
   id: string;
   nome: string;
   tipo: string;
-  categorias: string[]; // array de tags/categorias
+  tags?: string[]; // Changed from categorias
   descricao?: string;
-  licitacao_id?: string;
-  numero_documento?: string;
-  data_validade?: string;
-  url_documento?: string;
-  arquivo_path?: string;
+  licitacaoId?: string; // Corresponds to licitacao_id
+  licitacaoTitulo?: string; // Joined from licitacoes table
+  numeroDocumento?: string; // Corresponds to numero_documento
+  dataValidade?: string; // Format DD/MM/YYYY from API
+  urlDocumento?: string | null; // Placeholder
+  arquivoPath?: string | null; // Placeholder
   formato?: string;
   tamanho?: number;
   status: string;
-  criado_por?: string;
-  data_criacao: string;
-  data_atualizacao: string;
-  publicUrl?: string; // URL pública do arquivo
+  criadoPor?: string; // User ID
+  criadoPorNome?: string; // User Name
+  dataCriacao: string; // ISO String
+  dataAtualizacao: string; // ISO String
+  categoriaLegado?: string; // Legacy 'categoria' field if still needed
+  // publicUrl is removed as it was Supabase specific and now urlDocumento is a placeholder
 }
 
 export interface DocumentFilter {
   licitacaoId?: string;
   tipo?: string;
-  categoria?: string;
+  tagNome?: string; // Changed from categoria
   status?: string;
 }
 
 export interface DocumentFormData {
   nome: string;
   tipo: string;
-  categorias: string[]; // array de tags/categorias
+  tags?: string[]; // Changed from categorias
   descricao?: string;
   licitacaoId?: string;
   numeroDocumento?: string;
-  dataValidade?: string;
-  urlDocumento?: string;
-  arquivo?: File;
+  dataValidade?: string; // Expected as YYYY-MM-DD or string parsable by new Date()
+  // urlDocumento is handled by backend (placeholder)
+  arquivo?: File; // For upload
+  // Adicionar outros campos que o POST/PATCH da API de metadados aceita
+  status?: string;
+  criadoPor?: string; // User ID, should be set by auth context typically
+  categoriaLegado?: string;
 }
 
 // Hook para gerenciar operações de documentos
@@ -69,7 +76,7 @@ export function useDocuments() {
       if (filters) {
         if (filters.licitacaoId) params.append('licitacaoId', filters.licitacaoId);
         if (filters.tipo) params.append('tipo', filters.tipo);
-        if (filters.categoria) params.append('categoria', filters.categoria);
+        if (filters.tagNome) params.append('tagNome', filters.tagNome); // Changed from categoria to tagNome
         if (filters.status) params.append('status', filters.status);
       }
 
@@ -148,12 +155,19 @@ export function useDocuments() {
         throw new Error('Não autenticado');
       }
       
-      // Para compatibilidade com o backend atual
-      const dataToSend = {
-        ...documentData,
-        categoria: documentData.categorias && documentData.categorias.length > 0 
-                  ? documentData.categorias.join(',')
-                  : 'geral'
+      // API /api/documentos/doc (POST) agora espera 'tags' como array de strings
+      // e outros campos relevantes como 'criadoPor' (userId)
+      const payload = {
+        nome: documentData.nome,
+        tipo: documentData.tipo,
+        licitacaoId: documentData.licitacaoId,
+        descricao: documentData.descricao,
+        numeroDocumento: documentData.numeroDocumento,
+        dataValidade: documentData.dataValidade, // API espera YYYY-MM-DD ou null
+        tags: documentData.tags || [],
+        criadoPor: getAuthToken() ? JSON.parse(atob(getAuthToken()!.split('.')[1])).userId : null, // Exemplo, idealmente de um contexto de usuário
+        status: documentData.status || 'ativo',
+        categoriaLegado: documentData.categoriaLegado
       };
       
       const response = await fetch('/api/documentos/doc', {
@@ -162,20 +176,22 @@ export function useDocuments() {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(dataToSend)
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Erro ao criar documento: ${response.status} ${errorData}`);
+        const errorData = await response.json().catch(() => ({ error: `Erro ao criar documento: ${response.statusText}` }));
+        throw new Error(errorData.error || `Erro ao criar documento: ${response.status}`);
       }
 
       const data = await response.json();
       
       // Adicionar o novo documento à lista local
-      setDocuments(prevDocs => [...prevDocs, data.documento]);
-      
-      return data.documento;
+      if (data.documento) { // API agora retorna { success, message, documento }
+        setDocuments(prevDocs => [data.documento, ...prevDocs]);
+        return data.documento;
+      }
+      return null; // Ou lançar erro se data.documento não existir
     } catch (err: any) {
       console.error('Erro ao criar documento:', err);
       setError(err.message);
@@ -208,23 +224,28 @@ export function useDocuments() {
       formData.append('nome', documentData.nome);
       formData.append('tipo', documentData.tipo);
       
-      // Para compatibilidade com o backend atual, envie todas as categorias como uma string separada por vírgulas
-      if (documentData.categorias && documentData.categorias.length > 0) {
-        // Enviar todas as categorias como uma string separada por vírgula
-        formData.append('categoria', documentData.categorias.join(','));
-        
-        // Enviar também o array completo (para uso futuro quando o backend for atualizado)
-        documentData.categorias.forEach(cat => formData.append('categorias[]', cat));
-      } else {
-        // Categoria padrão se não houver nenhuma selecionada
-        formData.append('categoria', 'geral');
+      // Enviar tags como string separada por vírgulas para FormData
+      if (documentData.tags && documentData.tags.length > 0) {
+        formData.append('tags', documentData.tags.join(','));
       }
       
       if (documentData.descricao) formData.append('descricao', documentData.descricao);
       if (documentData.licitacaoId) formData.append('licitacaoId', documentData.licitacaoId);
       if (documentData.numeroDocumento) formData.append('numeroDocumento', documentData.numeroDocumento);
-      if (documentData.dataValidade) formData.append('dataValidade', documentData.dataValidade);
-      if (documentData.urlDocumento) formData.append('urlDocumento', documentData.urlDocumento);
+      if (documentData.dataValidade) formData.append('dataValidade', documentData.dataValidade); // API espera YYYY-MM-DD
+      // urlDocumento é placeholder, não precisa enviar
+
+      // Adicionar criadoPor (uploadPor na API de upload)
+      const decodedToken = getAuthToken() ? JSON.parse(atob(getAuthToken()!.split('.')[1])) : null;
+      if (decodedToken && decodedToken.userId) {
+        formData.append('uploadPor', decodedToken.userId);
+      } else {
+        console.warn("ID do usuário não encontrado para 'uploadPor'");
+        // Considerar lançar erro ou não enviar se for obrigatório
+      }
+      if (documentData.status) formData.append('status', documentData.status);
+      if (documentData.categoriaLegado) formData.append('categoria', documentData.categoriaLegado);
+
 
       const response = await fetch('/api/documentos/doc/upload', {
         method: 'POST',
@@ -302,49 +323,49 @@ export function useDocuments() {
 
       // Se não tiver arquivo, apenas atualizar os metadados
       try {
-        // Buscar documento atual para obter dados existentes
-        const currentDoc = await fetchDocumentById(id);
-        if (!currentDoc) {
-          throw new Error('Documento não encontrado');
+        // Se não tiver arquivo, apenas atualizar os metadados
+        // A API PATCH em /api/documentos/doc ou /api/documentos/doc/[id]
+        // agora espera 'tags' como array.
+        console.warn("Atualização de arquivo em updateDocument não é suportada diretamente. Faça upload separado e atualize metadados se necessário.");
+        
+        const metadataToUpdate: Partial<DocumentType> = { ...updateData };
+        delete metadataToUpdate.arquivo; // Remover o campo arquivo se existir
+        if (updateData.tags) { // Assegurar que tags é um array
+            metadataToUpdate.tags = Array.isArray(updateData.tags) ? updateData.tags : [];
         }
-        
-        const dataToSend = {
-          id,
-          ...updateData,
-          // Para compatibilidade com o backend atual
-          categoria: updateData.categorias && updateData.categorias.length > 0 
-                    ? updateData.categorias.join(',')
-                    : (currentDoc.categorias && currentDoc.categorias.length > 0 
-                      ? currentDoc.categorias.join(',')
-                      : 'geral')
-        };
-        
-        const response = await fetch(`/api/documentos/doc/${id}`, {
+
+
+        // Decidir qual endpoint PATCH usar. Se o PATCH em /api/documentos/doc aceita ID no corpo:
+        // const apiUrl = '/api/documentos/doc';
+        // Ou se o PATCH em /api/documentos/doc/[id] é o preferido para atualizações:
+        const apiUrl = `/api/documentos/doc/${id}`;
+
+        const response = await fetch(apiUrl, {
           method: 'PATCH',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(dataToSend)
+          // Se usar PATCH em /api/documentos/doc, o ID deve estar no corpo.
+          // Se usar PATCH em /api/documentos/doc/[id], o ID já está na URL.
+          body: JSON.stringify(apiUrl === '/api/documentos/doc' ? { id, ...metadataToUpdate } : metadataToUpdate)
         });
 
         if (!response.ok) {
-          const errorData = await response.text();
-          throw new Error(`Erro ao atualizar documento: ${response.status} ${errorData}`);
+          const errorData = await response.json().catch(() => ({error: `Erro ao atualizar metadados: ${response.statusText}`}));
+          throw new Error(errorData.error || `Erro ao atualizar metadados: ${response.status}`);
         }
 
         const data = await response.json();
         
         // Atualizar o documento na lista local
-        setDocuments(prevDocs => 
-          prevDocs.map(doc => doc.id === id ? data.documento : doc)
-        );
-        
-        return data.documento;
-      } catch (err: any) {
-        console.error('Erro ao atualizar documento:', err);
-        setError(err.message);
-        return null;
+        if (data.documento){
+          setDocuments(prevDocs =>
+            prevDocs.map(doc => doc.id === id ? data.documento : doc)
+          );
+          return data.documento;
+        }
+        return null; // Ou lançar erro se data.documento não existir
       }
     } catch (err: any) {
       console.error('Erro ao atualizar documento:', err);
@@ -366,34 +387,33 @@ export function useDocuments() {
         throw new Error('Não autenticado');
       }
 
+      // A API DELETE em /api/documentos/doc/[id] agora lida com o parâmetro 'fisicamente'
       const url = `/api/documentos/doc/${id}?fisicamente=${fisicamente}`;
       
       const response = await fetch(url, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+          // Content-Type não é usualmente necessário para DELETE se não houver corpo
         }
       });
 
       if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Erro ao excluir documento: ${response.status} ${errorData}`);
+        const errorData = await response.json().catch(() => ({error: `Erro ao excluir documento: ${response.statusText}`}));
+        throw new Error(errorData.error || `Erro ao excluir documento: ${response.status}`);
       }
 
       // Remover ou atualizar o documento na lista local
       if (fisicamente) {
-        // Remover completamente
         setDocuments(prevDocs => prevDocs.filter(doc => doc.id !== id));
       } else {
-        // Marcar como excluído
         setDocuments(prevDocs => 
-          prevDocs.map(doc => doc.id === id ? { ...doc, status: 'excluido' } : doc)
+          prevDocs.map(doc => (doc.id === id ? { ...doc, status: 'excluido' } : doc))
         );
       }
       
-      const data = await response.json();
-      return data;
+      const data = await response.json(); // API retorna { success: true, message: '...' }
+      return data.success; // Retornar boolean para delete
     } catch (err: any) {
       console.error('Erro ao excluir documento:', err);
       setError(err.message);

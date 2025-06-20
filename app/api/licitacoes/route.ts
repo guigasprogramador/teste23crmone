@@ -1,320 +1,75 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Licitacao, LicitacaoStatus, LicitacaoFiltros, LicitacaoEstatisticas } from '@/types/licitacoes';
-import { supabase, crmonefactory } from '@/lib/supabase/client';
+import { Licitacao, LicitacaoStatus, LicitacaoFiltros, LicitacaoEstatisticas, Documento } from '@/types/licitacoes';
+import { getDbConnection } from '@/lib/mysql/client';
+import { v4 as uuidv4 } from 'uuid';
 
-// GET - Obter licitações com filtros ou estatísticas
-export async function GET(request: NextRequest) {
-  try {
-    console.log('API de licitações: Recebendo requisição GET');
-    
-    const { searchParams } = new URL(request.url);
-    
-    // Parâmetros de filtro
-    const status = searchParams.get('status');
-    const orgao = searchParams.get('orgao');
-    const orgaoId = searchParams.get('orgaoId');
-    const responsavel = searchParams.get('responsavel');
-    const responsavelId = searchParams.get('responsavelId');
-    const modalidade = searchParams.get('modalidade');
-    const termo = searchParams.get('termo');
-    const dataInicio = searchParams.get('dataInicio');
-    const dataFim = searchParams.get('dataFim');
-    const valorMin = searchParams.get('valorMin') ? parseFloat(searchParams.get('valorMin')!) : null;
-    const valorMax = searchParams.get('valorMax') ? parseFloat(searchParams.get('valorMax')!) : null;
-    
-    // Parâmetro para estatísticas
-    const estatisticas = searchParams.get('estatisticas') === 'true';
-    
-    // Se solicitado estatísticas, retornar as estatísticas
-    if (estatisticas) {
-      return await obterEstatisticas();
-    }
-    
-    console.log('Buscando licitações no Supabase');
-    
-    // Método simplificado - primeiro buscar todas as licitações
-    let query = crmonefactory
-      .from('licitacoes')
-      .select('*');
-    
-    // Aplicar filtros na consulta se existirem
-    if (status) {
-      query = query.eq('status', status);
-    }
-    
-    if (orgaoId) {
-      query = query.eq('orgao_id', orgaoId);
-    }
-    
-    if (responsavelId) {
-      query = query.eq('responsavel_id', responsavelId);
-    }
-    
-    if (modalidade) {
-      query = query.eq('modalidade', modalidade);
-    }
-    
-    if (termo) {
-      query = query.or(`titulo.ilike.%${termo}%,objeto.ilike.%${termo}%,descricao.ilike.%${termo}%`);
-    }
-    
-    if (dataInicio) {
-      query = query.gte('data_abertura', dataInicio);
-    }
-    
-    if (dataFim) {
-      query = query.lte('data_abertura', dataFim);
-    }
-    
-    if (valorMin !== null) {
-      query = query.gte('valor_estimado', valorMin);
-    }
-    
-    if (valorMax !== null) {
-      query = query.lte('valor_estimado', valorMax);
-    }
-    
-    // Ordenar pelo mais recente
-    query = query.order('data_atualizacao', { ascending: false });
-    
-    // Executar a consulta
-    const { data, error } = await query;
-    
-    if (error) {
-      console.error('Erro ao consultar licitações:', error);
-      return NextResponse.json(
-        { error: 'Erro ao listar licitações: ' + error.message },
-        { status: 500 }
-      );
-    }
-    
-    console.log(`Foram encontradas ${data.length} licitações`);
-    
-    if (data.length === 0) {
-      return NextResponse.json([]);
-    }
-    
-    // Array para armazenar licitações completas
-    const licitacoesCompletas: Licitacao[] = [];
-    
-    // Processar cada licitação
-    for (const licitacao of data) {
-      // 1. Buscar o órgão relacionado
-      let orgaoData = null;
-      if (licitacao.orgao_id) {
-        const { data: orgaos, error: orgaoError } = await crmonefactory
-          .from('orgaos')
-          .select('*')
-          .eq('id', licitacao.orgao_id)
-          .single();
-        
-        if (orgaoError) {
-          console.warn(`Erro ao buscar órgão para licitação ${licitacao.id}:`, orgaoError);
-        } else {
-          orgaoData = orgaos;
-        }
-      }
-      
-      // 2. Buscar os responsáveis relacionados
-      let responsaveis = [];
-      if (licitacao.responsaveis_ids && Array.isArray(licitacao.responsaveis_ids)) {
-        // Buscar cada responsável individualmente
-        for (const respId of licitacao.responsaveis_ids) {
-          const { data: resp, error: respError } = await crmonefactory
-            .from('usuarios')
-            .select('id, nome')
-            .eq('id', respId)
-            .single();
-          
-          if (!respError && resp) {
-            responsaveis.push(resp);
-          }
-        }
-      } else if (licitacao.responsavel_id) {
-        // Buscar somente o responsável principal
-        const { data: resp, error: respError } = await crmonefactory
-          .from('usuarios')
-          .select('id, nome')
-          .eq('id', licitacao.responsavel_id)
-          .single();
-        
-        if (!respError && resp) {
-          responsaveis.push(resp);
-        }
-      }
-      
-      // 3. Buscar documentos relacionados
-      let documentos = [];
-      const { data: docs, error: docsError } = await crmonefactory
-        .from('documentos')
-        .select('*')
-        .eq('licitacao_id', licitacao.id);
-      
-      if (docsError) {
-        console.warn(`Erro ao buscar documentos para licitação ${licitacao.id}:`, docsError);
-      } else {
-        documentos = docs;
-      }
-      
-      // 4. Formatar a licitação com todas as informações
-      const licitacaoFormatada = formatarLicitacao(licitacao, orgaoData, responsaveis, documentos);
-      licitacoesCompletas.push(licitacaoFormatada);
-    }
-    
-    return NextResponse.json(licitacoesCompletas);
-  } catch (error: any) {
-    console.error('Erro ao consultar licitações:', error);
-    return NextResponse.json(
-      { error: 'Erro ao listar licitações: ' + error.message },
-      { status: 500 }
-    );
+// Helper para converter string DD/MM/YYYY ou ISO para YYYY-MM-DD
+function parseToYYYYMMDD(dateString: string | undefined | null): string | null {
+  if (!dateString) return null;
+  const date = new Date(dateString);
+  if (!isNaN(date.getTime())) {
+    // Ajustar para o fuso horário local antes de pegar o ISO string, para evitar problemas de dia anterior/posterior
+    // Esta é uma forma de tentar manter a data "local" pretendida.
+    const localDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    return localDate.toISOString().split('T')[0];
   }
+  // Se o parse direto falhar, tentar formato DD/MM/YYYY
+  const parts = dateString.split('/');
+  if (parts.length === 3) {
+    const [day, month, year] = parts;
+    if (day.length === 2 && month.length === 2 && year.length === 4) {
+        return `${year}-${month}-${day}`;
+    }
+  }
+  console.warn(`parseToYYYYMMDD: Formato de data inválido ou não reconhecido: ${dateString}`);
+  return null;
 }
 
-// POST - Criar nova licitação
-export async function POST(request: NextRequest) {
-  try {
-    console.log('API de licitações: Recebendo requisição POST');
-    
-    // Obter os dados
-    const licitacaoData = await request.json();
-    
-    // Validar dados obrigatórios
-    if (!licitacaoData.titulo) {
-      return NextResponse.json(
-        { error: 'Título é obrigatório' },
-        { status: 400 }
-      );
-    }
-    
-    console.log('Dados recebidos:', JSON.stringify(licitacaoData).substring(0, 200) + '...');
-    
-    // Preparar o objeto para inserção no banco
-    const licitacaoDb = {
-      titulo: licitacaoData.titulo,
-      status: licitacaoData.status || 'nova',
-      modalidade: licitacaoData.modalidade,
-      numero_processo: licitacaoData.numeroProcesso,
-      objeto: licitacaoData.objeto,
-      edital: licitacaoData.edital,
-      numero_edital: licitacaoData.numeroEdital,
-      data_abertura: licitacaoData.dataAbertura,
-      data_limite_proposta: licitacaoData.dataLimiteProposta,
-      orgao_id: licitacaoData.orgaoId,
-      valor_estimado: licitacaoData.valorEstimado,
-      responsavel_id: licitacaoData.responsavelId,
-      responsaveis_ids: licitacaoData.responsaveisIds,
-      url_licitacao: licitacaoData.urlLicitacao,
-      url_edital: licitacaoData.urlEdital,
-      descricao: licitacaoData.descricao,
-      forma_pagamento: licitacaoData.formaPagamento,
-      obs_financeiras: licitacaoData.obsFinanceiras,
-      tipo: licitacaoData.tipo,
-      tipo_faturamento: licitacaoData.tipoFaturamento,
-      margem_lucro: licitacaoData.margemLucro,
-      contato_nome: licitacaoData.contatoNome,
-      contato_email: licitacaoData.contatoEmail,
-      contato_telefone: licitacaoData.contatoTelefone,
-      data_julgamento: licitacaoData.dataJulgamento,
-      data_criacao: new Date().toISOString(),
-      data_atualizacao: new Date().toISOString()
-    };
-    
-    // Inserir no banco
-    const { data, error } = await crmonefactory
-      .from('licitacoes')
-      .insert(licitacaoDb)
-      .select()
-      .single();
-    
-    if (error) {
-      console.error('Erro ao criar licitação:', error);
-      return NextResponse.json(
-        { error: 'Erro ao criar licitação: ' + error.message },
-        { status: 500 }
-      );
-    }
-    
-    console.log('Licitação criada com sucesso, ID:', data.id);
-    
-    // Se houver documentos, processar cada um
-    if (licitacaoData.documentos && Array.isArray(licitacaoData.documentos)) {
-      for (const documento of licitacaoData.documentos) {
-        // Adaptar para o formato do banco
-        const docDb = {
-          nome: documento.nome,
-          url: documento.url,
-          arquivo: documento.arquivo,
-          tipo: documento.tipo,
-          tamanho: documento.tamanho,
-          licitacao_id: data.id, // ID da licitação recém-criada
-          formato: documento.formato,
-          categoria: documento.categoria,
-          categoria_id: documento.categoriaId,
-          upload_por: documento.uploadPor,
-          resumo: documento.resumo,
-          data_validade: documento.dataValidade,
-          status: documento.status || 'ativo',
-          data_criacao: new Date().toISOString(),
-          data_atualizacao: new Date().toISOString()
-        };
-        
-        // Inserir o documento
-        const { error: docError } = await crmonefactory
-          .from('documentos')
-          .insert(docDb);
-        
-        if (docError) {
-          console.warn(`Erro ao criar documento para licitação ${data.id}:`, docError);
-        }
-      }
-    }
-    
-    // Obter a licitação completa para retornar
-    return NextResponse.json(
-      await obterLicitacaoCompleta(data.id)
-    );
-  } catch (error: any) {
-    console.error('Erro ao criar licitação:', error);
-    return NextResponse.json(
-      { error: 'Erro ao criar licitação: ' + error.message },
-      { status: 500 }
-    );
-  }
-}
 
-// Função auxiliar para formatar dados do banco para o formato do frontend
-function formatarLicitacao(item: any, orgao = null, responsaveis = [], documentos = []): Licitacao {
-  // Extrair IDs dos responsáveis
-  const responsaveisIds = responsaveis.map((r: any) => r.id);
+// Função auxiliar para formatar dados da licitação do MySQL para o formato do frontend
+// Adaptação da função formatarLicitacao original
+function formatarLicitacaoMySQL(
+    item: any,
+    orgaoNome: string | null = null,
+    responsavelPrincipalNome: string | null = null,
+    responsaveisMultiplos: { id: string, nome: string, papel?: string }[] = [], // Array de objetos para múltiplos responsáveis
+    documentosLicitacao: any[] = [] // Documentos já podem vir com tags agregadas
+): Licitacao {
   
-  // Nome do responsável principal
-  let responsavelNome = '';
-  if (item.responsavel_id) {
-    const resp = responsaveis.find((r: any) => r.id === item.responsavel_id);
-    if (resp) {
-      responsavelNome = resp.nome;
-    }
+  // Formatar valor para string monetária BRL
+  let valorEstimadoFormatado = 'R$ 0,00';
+  if (item.valor_estimado !== null && item.valor_estimado !== undefined) {
+    valorEstimadoFormatado = `R$ ${Number(item.valor_estimado).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
   
+  // Formatar datas para DD/MM/YYYY, se existirem
+  const formatDate = (dateStr: string | null | undefined) => {
+    if (!dateStr) return undefined;
+    // Assume que dateStr já está no formato YYYY-MM-DD ou é um objeto Date
+    const date = new Date(dateStr);
+    // Ajuste para UTC para pegar a data correta independente do fuso horário do servidor de BD
+    return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()).toLocaleDateString('pt-BR');
+  };
+
   return {
     id: item.id,
     titulo: item.titulo,
-    status: item.status,
+    status: item.status as LicitacaoStatus,
     modalidade: item.modalidade,
-    numeroProcesso: item.numero_processo,
-    dataAbertura: item.data_abertura,
-    dataLimiteProposta: item.data_limite_proposta,
-    orgao: orgao ? orgao.nome : '',
+    numeroProcesso: item.numero_processo, // Ajustado para snake_case do DB
+    dataAbertura: formatDate(item.data_abertura),
+    dataLimiteProposta: formatDate(item.data_limite_proposta),
+    orgao: orgaoNome || item.orgao_nome || '', // orgao_nome da junção na query principal
     orgaoId: item.orgao_id,
-    valorEstimado: item.valor_estimado,
+    valorEstimado: valorEstimadoFormatado, // Formatado como string
+    _valorEstimadoNumerico: Number(item.valor_estimado), // Para cálculos no frontend se necessário
     objeto: item.objeto,
     edital: item.edital,
     numeroEdital: item.numero_edital,
-    responsavel: responsavelNome || '',
+    responsavel: responsavelPrincipalNome || item.responsavel_principal_nome || '', // da junção na query principal
     responsavelId: item.responsavel_id,
-    responsaveisIds: responsaveisIds,
-    prazo: item.prazo,
+    responsaveis: responsaveisMultiplos.map(r => ({ id: r.id, nome: r.nome, papel: r.papel || 'N/A' })), // Mapeia para o formato esperado
+    prazo: item.prazo, // Este campo parece ser uma string descritiva, não uma data
     urlLicitacao: item.url_licitacao,
     urlEdital: item.url_edital,
     descricao: item.descricao,
@@ -326,175 +81,382 @@ function formatarLicitacao(item: any, orgao = null, responsaveis = [], documento
     contatoNome: item.contato_nome,
     contatoEmail: item.contato_email,
     contatoTelefone: item.contato_telefone,
-    dataJulgamento: item.data_julgamento,
-    dataCriacao: item.data_criacao,
-    dataAtualizacao: item.data_atualizacao,
-    documentos: documentos.map((doc: any) => ({
+    dataJulgamento: formatDate(item.data_julgamento),
+    dataCriacao: item.data_criacao ? new Date(item.data_criacao).toISOString() : '',
+    dataAtualizacao: item.data_atualizacao ? new Date(item.data_atualizacao).toISOString() : '',
+    documentos: documentosLicitacao.map((doc: any): Documento => ({
       id: doc.id,
       nome: doc.nome,
-      url: doc.url,
-      arquivo: doc.arquivo,
-      dataCriacao: doc.data_criacao,
-      dataAtualizacao: doc.data_atualizacao,
+      url: doc.url_documento || doc.url, // url_documento do DDL, url do Supabase
+      arquivo: doc.arquivo_path || doc.arquivo, // arquivo_path do DDL, arquivo do Supabase
+      dataCriacao: doc.data_criacao ? new Date(doc.data_criacao).toISOString() : '',
+      dataAtualizacao: doc.data_atualizacao ? new Date(doc.data_atualizacao).toISOString() : '',
       tipo: doc.tipo,
       tamanho: doc.tamanho,
       licitacaoId: doc.licitacao_id,
       formato: doc.formato,
-      categoria: doc.categoria,
-      categoriaId: doc.categoria_id,
-      uploadPor: doc.upload_por,
-      resumo: doc.resumo,
-      dataValidade: doc.data_validade,
-      status: doc.status
+      categoria: doc.categoria, // Legacy categoria
+      tags: doc.tags ? doc.tags.split(',') : [], // Tags agregadas como string
+      criadoPor: doc.criado_por, // ID do usuário
+      // uploadPor: doc.criado_por, // Se upload_por no frontend mapeia para criado_por
+      status: doc.status,
+      dataValidade: formatDate(doc.data_validade),
+      // resumo: doc.resumo, // Se necessário
     }))
   };
 }
 
-// Função para obter uma licitação completa por ID
-async function obterLicitacaoCompleta(id: string): Promise<Licitacao> {
-  // 1. Buscar a licitação
-  const { data: licitacao, error } = await crmonefactory
-    .from('licitacoes')
-    .select('*')
-    .eq('id', id)
-    .single();
-  
-  if (error) {
-    throw new Error(`Erro ao buscar licitação: ${error.message}`);
+
+// Função para obter uma licitação completa por ID do MySQL
+async function obterLicitacaoCompletaMySQL(licitacaoId: string, connection: any): Promise<Licitacao | null> {
+  // 1. Buscar a licitação principal e dados do órgão e responsável principal
+  const [licitacaoRows]: any = await connection.execute(
+    `SELECT l.*, o.nome as orgao_nome, u.name as responsavel_principal_nome
+     FROM licitacoes l
+     LEFT JOIN orgaos o ON l.orgao_id = o.id
+     LEFT JOIN users u ON l.responsavel_id = u.id
+     WHERE l.id = ?`,
+    [licitacaoId]
+  );
+
+  if (licitacaoRows.length === 0) {
+    return null;
   }
+  const licitacaoPrincipal = licitacaoRows[0];
+
+  // 2. Buscar os múltiplos responsáveis (usuários)
+  const [responsaveisRows]: any = await connection.execute(
+    `SELECT u.id, u.name as nome, lr.papel
+     FROM licitacao_responsaveis lr
+     JOIN users u ON lr.usuario_id = u.id
+     WHERE lr.licitacao_id = ?`,
+    [licitacaoId]
+  );
+
+  // 3. Buscar documentos relacionados com tags agregadas
+  const [documentosRows]: any = await connection.execute(
+    `SELECT d.*, GROUP_CONCAT(t.nome) as tags
+     FROM documentos d
+     LEFT JOIN documentos_tags dt ON d.id = dt.documento_id
+     LEFT JOIN tags t ON dt.tag_id = t.id
+     WHERE d.licitacao_id = ?
+     GROUP BY d.id`,
+    [licitacaoId]
+  );
   
-  // 2. Buscar o órgão relacionado
-  let orgaoData = null;
-  if (licitacao.orgao_id) {
-    const { data: orgao } = await crmonefactory
-      .from('orgaos')
-      .select('*')
-      .eq('id', licitacao.orgao_id)
-      .single();
-    
-    orgaoData = orgao;
-  }
-  
-  // 3. Buscar os responsáveis
-  let responsaveis = [];
-  if (licitacao.responsaveis_ids && Array.isArray(licitacao.responsaveis_ids)) {
-    for (const respId of licitacao.responsaveis_ids) {
-      const { data: resp } = await crmonefactory
-        .from('usuarios')
-        .select('id, nome')
-        .eq('id', respId)
-        .single();
-      
-      if (resp) {
-        responsaveis.push(resp);
-      }
-    }
-  } else if (licitacao.responsavel_id) {
-    const { data: resp } = await crmonefactory
-      .from('usuarios')
-      .select('id, nome')
-      .eq('id', licitacao.responsavel_id)
-      .single();
-    
-    if (resp) {
-      responsaveis.push(resp);
-    }
-  }
-  
-  // 4. Buscar documentos
-  const { data: documentos } = await crmonefactory
-    .from('documentos')
-    .select('*')
-    .eq('licitacao_id', id);
-  
-  // 5. Formatar e retornar
-  return formatarLicitacao(licitacao, orgaoData, responsaveis, documentos || []);
+  return formatarLicitacaoMySQL(
+    licitacaoPrincipal,
+    licitacaoPrincipal.orgao_nome,
+    licitacaoPrincipal.responsavel_principal_nome,
+    responsaveisRows,
+    documentosRows
+  );
 }
 
-// Função para obter estatísticas
-async function obterEstatisticas(): Promise<NextResponse> {
+// Função para obter estatísticas do MySQL
+async function obterEstatisticasMySQL(connection: any, periodo: string): Promise<LicitacaoEstatisticas> {
+  const hoje = new Date();
+  let dataInicio = new Date();
+  switch (periodo) {
+    case 'semana': dataInicio.setDate(hoje.getDate() - 7); break;
+    case 'mes': dataInicio.setMonth(hoje.getMonth() - 1); break;
+    case 'trimestre': dataInicio.setMonth(hoje.getMonth() - 3); break;
+    case 'ano': dataInicio.setFullYear(hoje.getFullYear() - 1); break;
+    default: dataInicio.setMonth(hoje.getMonth() - 1);
+  }
+  const dataInicioSql = dataInicio.toISOString().split('T')[0];
+
+  const [totalRows]: any = await connection.execute('SELECT COUNT(*) as count FROM licitacoes WHERE data_criacao >= ?', [dataInicioSql]);
+  const [vencidasRows]: any = await connection.execute("SELECT COUNT(*) as count FROM licitacoes WHERE status = 'fechado_ganho' AND data_criacao >= ?", [dataInicioSql]); // Assumindo 'fechado_ganho' como 'vencida'
+  const [ativasRows]: any = await connection.execute("SELECT COUNT(*) as count FROM licitacoes WHERE status IN ('analise_interna', 'aguardando_pregao', 'envio_documentos', 'assinaturas', 'novo_lead', 'proposta_enviada', 'negociacao') AND data_criacao >= ?", [dataInicioSql]);
+  const [valorTotalRows]: any = await connection.execute("SELECT SUM(valor_estimado) as sum FROM licitacoes WHERE status NOT IN ('arquivada', 'fechado_perdido') AND data_criacao >= ?", [dataInicioSql]);
+  
+  const [finalizadasStatusRows]: any = await connection.execute(
+      "SELECT COUNT(*) as total_finalizadas, SUM(CASE WHEN status = 'fechado_ganho' THEN 1 ELSE 0 END) as total_vencidas FROM licitacoes WHERE status IN ('fechado_ganho', 'fechado_perdido') AND data_criacao >= ?",
+      [dataInicioSql]
+  );
+  const taxaSucesso = (finalizadasStatusRows[0].total_finalizadas > 0)
+      ? (finalizadasStatusRows[0].total_vencidas / finalizadasStatusRows[0].total_finalizadas) * 100
+      : 0;
+
+  const [pregoesProximosRows]: any = await connection.execute("SELECT COUNT(*) as count FROM licitacoes WHERE data_abertura BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY) AND data_criacao >= ?", [dataInicioSql]);
+  const [porModalidadeRows]: any = await connection.execute('SELECT modalidade, COUNT(*) as count FROM licitacoes WHERE data_criacao >= ? GROUP BY modalidade', [dataInicioSql]);
+  const [porStatusRows]: any = await connection.execute('SELECT status, COUNT(*) as count FROM licitacoes WHERE data_criacao >= ? GROUP BY status', [dataInicioSql]);
+
+  const porModalidade: Record<string, number> = {};
+  (porModalidadeRows as any[]).forEach(row => { porModalidade[row.modalidade] = row.count; });
+  const porStatus: Record<string, number> = {};
+  (porStatusRows as any[]).forEach(row => { porStatus[row.status] = row.count; });
+
+  return {
+    total: totalRows[0].count,
+    ativas: ativasRows[0].count,
+    vencidas: vencidasRows[0].count, // 'fechado_ganho'
+    valorTotal: valorTotalRows[0].sum || 0,
+    taxaSucesso: parseFloat(taxaSucesso.toFixed(2)),
+    pregoesProximos: pregoesProximosRows[0].count,
+    porModalidade,
+    porStatus,
+  };
+}
+
+
+// GET - Obter licitações com filtros ou estatísticas
+export async function GET(request: NextRequest) {
+  let connection;
+  console.log('API de licitações: Recebendo requisição GET com MySQL');
   try {
-    console.log('Calculando estatísticas');
+    const { searchParams } = new URL(request.url);
+    connection = await getDbConnection();
+
+    const estatisticasParam = searchParams.get('estatisticas');
+    if (estatisticasParam === 'true') {
+      const periodo = searchParams.get('periodo') || 'mes';
+      const stats = await obterEstatisticasMySQL(connection, periodo);
+      return NextResponse.json(stats);
+    }
+
+    let sql = `
+      SELECT l.id, l.titulo, l.status, l.modalidade, l.data_abertura, l.valor_estimado,
+             o.nome as orgao_nome, u.name as responsavel_principal_nome,
+             l.data_criacao, l.data_atualizacao, l.objeto, l.descricao, l.numero_edital, l.prazo,
+             l.orgao_id, l.responsavel_id
+      FROM licitacoes l
+      LEFT JOIN orgaos o ON l.orgao_id = o.id
+      LEFT JOIN users u ON l.responsavel_id = u.id
+    `;
+    const conditions: string[] = [];
+    const paramsSql: any[] = [];
+
+    const status = searchParams.get('status');
+    if (status) { conditions.push('l.status = ?'); paramsSql.push(status); }
     
-    // Buscar todas as licitações para cálculos
-    const { data, error } = await crmonefactory
-      .from('licitacoes')
-      .select('*');
+    const orgaoId = searchParams.get('orgaoId');
+    if (orgaoId) { conditions.push('l.orgao_id = ?'); paramsSql.push(orgaoId); }
     
-    if (error) {
-      console.error('Erro ao buscar licitações para estatísticas:', error);
-      return NextResponse.json(
-        { error: 'Erro ao calcular estatísticas: ' + error.message },
-        { status: 500 }
-      );
+    const responsavelId = searchParams.get('responsavelId');
+    if (responsavelId) { conditions.push('l.responsavel_id = ?'); paramsSql.push(responsavelId); }
+    
+    const modalidade = searchParams.get('modalidade');
+    if (modalidade) { conditions.push('l.modalidade = ?'); paramsSql.push(modalidade); }
+    
+    const termo = searchParams.get('termo');
+    if (termo) {
+      conditions.push('(l.titulo LIKE ? OR l.objeto LIKE ? OR l.descricao LIKE ?)');
+      const searchTerm = `%${termo}%`;
+      paramsSql.push(searchTerm, searchTerm, searchTerm);
     }
     
-    console.log(`Encontradas ${data.length} licitações para cálculo de estatísticas`);
+    const dataInicio = parseToYYYYMMDD(searchParams.get('dataInicio'));
+    if (dataInicio) { conditions.push('l.data_abertura >= ?'); paramsSql.push(dataInicio); }
     
-    // Contadores
-    const total = data.length;
-    const vencidas = data.filter(l => l.status === 'vencida').length;
-    const ativas = data.filter(l => 
-      ['analise_interna', 'aguardando_pregao', 'envio_documentos', 'assinaturas'].includes(l.status)
-    ).length;
+    const dataFim = parseToYYYYMMDD(searchParams.get('dataFim'));
+    if (dataFim) { conditions.push('l.data_abertura <= ?'); paramsSql.push(dataFim); }
     
-    // Calcular valor total de licitações ativas
-    const valorTotal = data
-      .filter(l => l.status !== 'arquivada' && l.status !== 'nao_vencida')
-      .reduce((soma, l) => soma + (l.valor_estimado || 0), 0);
+    const valorMin = searchParams.get('valorMin');
+    if (valorMin) { conditions.push('l.valor_estimado >= ?'); paramsSql.push(parseFloat(valorMin));}
     
-    // Calcular taxa de sucesso (vencidas / total de finalizadas)
-    const finalizadas = data.filter(l => 
-      ['vencida', 'nao_vencida', 'concluida', 'arquivada'].includes(l.status)
-    ).length;
+    const valorMax = searchParams.get('valorMax');
+    if (valorMax) { conditions.push('l.valor_estimado <= ?'); paramsSql.push(parseFloat(valorMax));}
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+    sql += ' ORDER BY l.data_atualizacao DESC';
+
+    console.log("Executando SQL para lista de licitações:", sql, paramsSql);
+    const [rows] = await connection.execute(sql, paramsSql);
+    const licitacoesData = rows as any[];
+
+    if (licitacoesData.length === 0) {
+      return NextResponse.json([]);
+    }
     
-    const taxaSucesso = finalizadas > 0 
-      ? (vencidas / finalizadas) * 100 
-      : 0;
-    
-    // Calcular pregões próximos (com data de abertura nos próximos 7 dias)
-    const hoje = new Date();
-    const emSeteDias = new Date();
-    emSeteDias.setDate(hoje.getDate() + 7);
-    
-    const pregoesProximos = data.filter(l => {
-      if (!l.data_abertura) return false;
-      const dataAbertura = new Date(l.data_abertura);
-      return dataAbertura >= hoje && dataAbertura <= emSeteDias;
-    }).length;
-    
-    // Estatísticas por modalidade
-    const porModalidade: Record<string, number> = {};
-    data.forEach(l => {
-      if (l.modalidade) {
-        porModalidade[l.modalidade] = (porModalidade[l.modalidade] || 0) + 1;
-      }
-    });
-    
-    // Estatísticas por status
-    const porStatus: Record<string, number> = {};
-    data.forEach(l => {
-      porStatus[l.status] = (porStatus[l.status] || 0) + 1;
-    });
-    
-    const estatisticas: LicitacaoEstatisticas = {
-      total,
-      ativas,
-      vencidas,
-      valorTotal,
-      taxaSucesso,
-      pregoesProximos,
-      porModalidade,
-      porStatus
-    };
-    
-    console.log('Estatísticas calculadas com sucesso');
-    return NextResponse.json(estatisticas);
-  } catch (error) {
-    console.error('Erro ao calcular estatísticas:', error);
+    // Para a lista, não vamos buscar todos os detalhes de cada licitação (responsaveis multiplos, documentos)
+    // para evitar N+1 queries. A formatação lidará com os dados disponíveis.
+    const licitacoesFormatadas = licitacoesData.map(lic =>
+        formatarLicitacaoMySQL(
+            lic,
+            lic.orgao_nome,
+            lic.responsavel_principal_nome,
+            [], // Sem múltiplos responsáveis na lista geral por padrão
+            []  // Sem documentos na lista geral por padrão
+        )
+    );
+
+    return NextResponse.json(licitacoesFormatadas);
+
+  } catch (error: any) {
+    console.error('Erro ao consultar licitações (MySQL):', error);
     return NextResponse.json(
-      { error: 'Erro interno ao calcular estatísticas' },
+      { error: 'Erro ao listar licitações: ' + error.message, details: error.code || 'N/A' },
       { status: 500 }
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada (GET licitacoes).");
+      } catch (releaseError: any) {
+        console.error("Erro ao liberar conexão MySQL (GET licitacoes):", releaseError.message);
+      }
+    }
+  }
+}
+
+// POST - Criar nova licitação
+export async function POST(request: NextRequest) {
+  let connection;
+  console.log('API de licitações: Recebendo requisição POST para MySQL');
+  try {
+    const licitacaoData = await request.json();
+    console.log('Dados recebidos para POST:', JSON.stringify(licitacaoData).substring(0, 300) + '...');
+
+    if (!licitacaoData.titulo || !licitacaoData.modalidade || !licitacaoData.orgaoId) {
+      return NextResponse.json(
+        { error: 'Título, Modalidade e Órgão são obrigatórios.' },
+        { status: 400 }
+      );
+    }
+
+    connection = await getDbConnection();
+    await connection.beginTransaction();
+    console.log('Transação MySQL iniciada para criar licitação.');
+
+    const newLicId = uuidv4();
+    const dataAtual = new Date(); // Para created_at e updated_at
+
+    // Mapear e converter dados para o formato do DB (snake_case)
+    const licitacaoDb = {
+      id: newLicId,
+      titulo: licitacaoData.titulo,
+      status: licitacaoData.status || 'analise_interna', // Default status
+      modalidade: licitacaoData.modalidade,
+      numero_processo: licitacaoData.numeroProcesso || null,
+      objeto: licitacaoData.objeto || null,
+      edital: licitacaoData.edital || null,
+      numero_edital: licitacaoData.numeroEdital || null,
+      data_abertura: parseToYYYYMMDD(licitacaoData.dataAbertura),
+      data_limite_proposta: parseToYYYYMMDD(licitacaoData.dataLimiteProposta),
+      data_julgamento: parseToYYYYMMDD(licitacaoData.dataJulgamento),
+      orgao_id: licitacaoData.orgaoId,
+      valor_estimado: licitacaoData.valorEstimado ? parseFloat(String(licitacaoData.valorEstimado).replace(/[^0-9,.-]+/g,"").replace(".","").replace(",",".")) : null,
+      responsavel_id: licitacaoData.responsavelId || null, // FK para users
+      prazo: licitacaoData.prazo || null,
+      url_licitacao: licitacaoData.urlLicitacao || null,
+      url_edital: licitacaoData.urlEdital || null,
+      descricao: licitacaoData.descricao || null,
+      forma_pagamento: licitacaoData.formaPagamento || null,
+      obs_financeiras: licitacaoData.obsFinanceiras || null,
+      tipo: licitacaoData.tipo || null,
+      tipo_faturamento: licitacaoData.tipoFaturamento || null,
+      margem_lucro: licitacaoData.margemLucro ? parseFloat(String(licitacaoData.margemLucro)) : null,
+      contato_nome: licitacaoData.contatoNome || null,
+      contato_email: licitacaoData.contatoEmail || null,
+      contato_telefone: licitacaoData.contatoTelefone || null,
+      posicao_kanban: licitacaoData.posicaoKanban || 0,
+      // data_criacao e data_atualizacao serão definidos como NOW() no insert
+    };
+
+    const licitacaoFields = Object.keys(licitacaoDb);
+    const licitacaoPlaceholders = licitacaoFields.map(() => '?').join(', ');
+    const licitacaoValues = Object.values(licitacaoDb);
+
+    const sqlInsertLicitacao = `
+      INSERT INTO licitacoes (${licitacaoFields.join(', ')}, data_criacao, data_atualizacao)
+      VALUES (${licitacaoPlaceholders}, NOW(), NOW())
+    `;
+    await connection.execute(sqlInsertLicitacao, licitacaoValues);
+    console.log('Licitação inserida com ID:', newLicId);
+
+    // Lidar com responsaveisIds (múltiplos responsáveis)
+    if (licitacaoData.responsaveis && Array.isArray(licitacaoData.responsaveis) && licitacaoData.responsaveis.length > 0) {
+      const responsaveisInsertPromises = licitacaoData.responsaveis.map((resp: any) => {
+        // resp deve ser um objeto { id: userId, papel: 'seu papel' }
+        // Se for apenas um array de IDs, o papel precisa ser definido ou default
+        const responsavelUserId = typeof resp === 'string' ? resp : resp.id;
+        const papel = typeof resp === 'object' ? resp.papel : 'Participante'; // Default papel
+
+        if (!responsavelUserId) return Promise.resolve(); // Ignorar se não houver ID
+
+        return connection.execute(
+          'INSERT INTO licitacao_responsaveis (id, licitacao_id, usuario_id, papel, data_atribuicao) VALUES (?, ?, ?, ?, NOW())',
+          [uuidv4(), newLicId, responsavelUserId, papel]
+        );
+      });
+      await Promise.all(responsaveisInsertPromises);
+      console.log('Responsáveis da licitação inseridos.');
+    }
+    
+    // Lidar com documentos
+    if (licitacaoData.documentos && Array.isArray(licitacaoData.documentos) && licitacaoData.documentos.length > 0) {
+      for (const doc of licitacaoData.documentos) {
+        const newDocId = uuidv4();
+        const criadoPorId = licitacaoData.usuarioId || licitacaoData.responsavelId; // Assumindo que o criador é o responsável principal ou um usuário logado (a ser passado)
+
+        await connection.execute(
+          `INSERT INTO documentos (id, nome, tipo, url_documento, arquivo_path, formato, tamanho, status, criado_por, licitacao_id, categoria, data_criacao, data_atualizacao)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+          [
+            newDocId, doc.nome, doc.tipo || 'Outro', doc.url || null, doc.arquivo || null,
+            doc.formato || null, doc.tamanho || 0, doc.status || 'ativo', criadoPorId, newLicId,
+            doc.categoria || null // Legacy categoria field
+          ]
+        );
+        console.log('Documento inserido com ID:', newDocId, 'para licitação ID:', newLicId);
+
+        if (doc.tags && Array.isArray(doc.tags)) {
+          for (const tagName of doc.tags) {
+            if (typeof tagName !== 'string' || tagName.trim() === '') continue;
+
+            let [tagRows]: any = await connection.execute('SELECT id FROM tags WHERE nome = ?', [tagName.trim()]);
+            let tagId;
+            if (tagRows.length > 0) {
+              tagId = tagRows[0].id;
+            } else {
+              tagId = uuidv4();
+              await connection.execute('INSERT INTO tags (id, nome, created_at, updated_at) VALUES (?, ?, NOW(), NOW())', [tagId, tagName.trim()]);
+            }
+            await connection.execute('INSERT INTO documentos_tags (documento_id, tag_id) VALUES (?, ?)', [newDocId, tagId]);
+          }
+          console.log('Tags do documento inseridas.');
+        }
+      }
+    }
+
+    await connection.commit();
+    console.log('Transação MySQL commitada para criar licitação.');
+
+    // Obter a licitação completa para retornar na resposta
+    const licitacaoCompleta = await obterLicitacaoCompletaMySQL(newLicId, connection);
+    if (!licitacaoCompleta) {
+        // Isso não deveria acontecer se a inserção e o commit foram bem-sucedidos
+        return NextResponse.json({ error: "Falha ao buscar licitação recém-criada." }, { status: 500});
+    }
+    return NextResponse.json(licitacaoCompleta, { status: 201 });
+
+  } catch (error: any) {
+    console.error('Erro ao criar licitação (MySQL):', error);
+    if (connection) {
+      try {
+        await connection.rollback();
+        console.log("Transação MySQL revertida devido a erro.");
+      } catch (rollbackError: any) {
+        console.error("Erro ao tentar reverter transação MySQL:", rollbackError.message);
+      }
+    }
+    return NextResponse.json(
+      { error: 'Erro ao criar licitação: ' + error.message, details: error.code || 'N/A' },
+      { status: 500 }
+    );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada (POST licitacao).");
+      } catch (releaseError: any) {
+        console.error("Erro ao liberar conexão MySQL (POST licitacao):", releaseError.message);
+      }
+    }
   }
 }

@@ -1,30 +1,78 @@
 import { useState, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
 
-// Definir tipos
-interface Licitacao {
+// Definir tipos (Atualizado para refletir a estrutura do backend MySQL)
+
+export interface DocumentoDetalhado {
+  id: string;
+  nome: string;
+  url?: string;
+  arquivo_path?: string;
+  tipo?: string;
+  formato?: string;
+  tamanho?: number;
+  status?: string;
+  criado_por?: string; // User ID
+  data_criacao?: string; // ISO String
+  data_atualizacao?: string; // ISO String
+  tags?: string[];
+  // Campos legados ou outros que possam vir da tabela documentos
+  categoria?: string; // categoriaLegado
+  numeroDocumento?: string;
+  dataValidade?: string; // Formatado DD/MM/YYYY
+  licitacaoId?: string;
+}
+
+export interface ResponsavelDetalhado {
+  id: string; // Corresponde ao users.id
+  nome?: string;
+  papel?: string;
+}
+
+export interface OrgaoDetalhado {
+  id: string;
+  nome: string;
+  // Outros campos relevantes da tabela orgaos podem ser adicionados aqui
+  // Ex: cnpj, cidade, estado
+}
+
+export interface Licitacao {
   id: string;
   titulo: string;
-  status: string;
-  data_abertura: string;
-  data_encerramento: string;
-  valor_estimado: number;
-  url_edital: string;
-  url_licitacao: string;
-  contato_email: string;
-  contato_telefone: string;
-  orgao: any;
-  responsavel: string;
-  modalidade: string;
-  objeto: string;
-  edital: string;
-  dataAbertura: string;
-  valorEstimado: number;
-  dataEncerramento: string;
-  urlEdital: string;
-  urlLicitacao: string;
-  contatoEmail: string;
-  contatoTelefone: string;
+  status?: string;
+  modalidade?: string;
+  numeroProcesso?: string;
+  dataAbertura?: string; // Formatado DD/MM/YYYY pela API
+  dataPublicacao?: string; // Formatado DD/MM/YYYY pela API
+  dataJulgamento?: string; // Formatado DD/MM/YYYY pela API
+  dataLimiteProposta?: string; // Formatado DD/MM/YYYY pela API
+  valorEstimado?: string; // Formatado como "R$ X.XXX,XX" pela API
+  _valorEstimadoNumerico?: number; // Valor numérico puro
+  valorProposta?: number; // Numérico
+  objeto?: string;
+  edital?: string;
+  numeroEdital?: string;
+  responsavelId?: string;
+  responsavel?: string; // Nome do responsável principal (responsavel_principal_nome da API)
+  prazo?: string;
+  urlLicitacao?: string;
+  urlEdital?: string;
+  descricao?: string;
+  formaPagamento?: string;
+  obsFinanceiras?: string;
+  tipo?: string;
+  tipoFaturamento?: string;
+  margemLucro?: number;
+  contatoNome?: string;
+  contatoEmail?: string;
+  contatoTelefone?: string;
+  posicaoKanban?: number;
+  dataCriacao?: string; // ISO String
+  dataAtualizacao?: string; // ISO String
+  orgaoId?: string;
+  orgao?: OrgaoDetalhado | string; // Pode ser objeto ou apenas nome na listagem
+  responsaveis?: ResponsavelDetalhado[];
+  documentos?: DocumentoDetalhado[];
 }
 
 interface LicitacaoFiltros {

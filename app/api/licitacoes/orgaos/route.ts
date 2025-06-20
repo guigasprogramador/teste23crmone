@@ -1,200 +1,190 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Orgao } from '@/types/licitacoes';
-import { crmonefactory } from '@/lib/supabase/client';
+import { Orgao, OrgaoContato } from '@/types/licitacoes'; // Assuming OrgaoContato is defined
+import { getDbConnection } from '@/lib/mysql/client';
+import { v4 as uuidv4 } from 'uuid';
+
+// Função auxiliar para formatar o órgão no formato esperado pelo frontend
+function formatarOrgaoMySQL(orgaoRow: any, contatosRows: any[] = []): Orgao {
+  return {
+    id: orgaoRow.id,
+    nome: orgaoRow.nome,
+    tipo: orgaoRow.tipo,
+    cnpj: orgaoRow.cnpj,
+    endereco: orgaoRow.endereco,
+    cidade: orgaoRow.cidade,
+    estado: orgaoRow.estado,
+    segmento: orgaoRow.segmento,
+    origemLead: orgaoRow.origem_lead, // snake_case from DB
+    responsavelInterno: orgaoRow.responsavel_interno, // snake_case from DB
+    descricao: orgaoRow.descricao,
+    observacoes: orgaoRow.observacoes,
+    faturamento: orgaoRow.faturamento,
+    contatos: contatosRows.map((contato: any): OrgaoContato => ({ // Ensure OrgaoContato type matches
+      id: contato.id,
+      nome: contato.nome,
+      cargo: contato.cargo,
+      email: contato.email,
+      telefone: contato.telefone,
+      // dataCriacao: contato.data_criacao, // If needed by frontend type
+      // dataAtualizacao: contato.data_atualizacao, // If needed by frontend type
+    })),
+    dataCriacao: orgaoRow.data_criacao, // snake_case from DB
+    dataAtualizacao: orgaoRow.data_atualizacao, // snake_case from DB
+    ativo: Boolean(orgaoRow.ativo) // Convert TINYINT to boolean
+  };
+}
 
 // GET - Listar órgãos
 export async function GET(request: NextRequest) {
+  let connection;
+  console.log("GET /api/licitacoes/orgaos - Iniciando consulta com MySQL");
   try {
     const { searchParams } = new URL(request.url);
+    connection = await getDbConnection();
     
-    // Parâmetros de filtro
     const termo = searchParams.get('termo');
     const segmento = searchParams.get('segmento');
     const estado = searchParams.get('estado');
-    const ativo = searchParams.get('ativo');
+    const ativoParam = searchParams.get('ativo');
     
-    // Iniciar a consulta
-    let query = crmonefactory
-      .from('orgaos')
-      .select(`
-        *,
-        orgao_contatos (
-          id,
-          nome,
-          cargo,
-          email,
-          telefone
-        )
-      `);
-    
-    // Aplicar filtros se existirem
+    let sql = 'SELECT * FROM orgaos';
+    const conditions: string[] = [];
+    const paramsSql: any[] = [];
+
     if (termo) {
-      query = query.or(`nome.ilike.%${termo}%,cnpj.ilike.%${termo}%`);
+      conditions.push('(nome LIKE ? OR cnpj LIKE ?)');
+      const searchTerm = `%${termo}%`;
+      paramsSql.push(searchTerm, searchTerm);
     }
-    
     if (segmento) {
-      query = query.eq('segmento', segmento);
+      conditions.push('segmento = ?');
+      paramsSql.push(segmento);
     }
-    
     if (estado) {
-      query = query.eq('estado', estado);
+      conditions.push('estado = ?');
+      paramsSql.push(estado);
     }
-    
-    if (ativo) {
-      query = query.eq('ativo', ativo === 'true');
+    if (ativoParam !== null) {
+      conditions.push('ativo = ?');
+      paramsSql.push(ativoParam === 'true' ? 1 : 0);
     }
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+    sql += ' ORDER BY nome ASC';
     
-    // Ordenar por nome
-    query = query.order('nome', { ascending: true });
+    console.log("Executando SQL para listar órgãos:", sql, paramsSql);
+    const [orgaosRows] = await connection.execute(sql, paramsSql);
     
-    // Executar a consulta
-    const { data, error } = await query;
-    
-    if (error) {
-      console.error('Erro ao consultar órgãos:', error);
-      return NextResponse.json(
-        { error: 'Erro ao listar órgãos: ' + error.message },
-        { status: 500 }
+    const orgaosFormatados: Orgao[] = [];
+    for (const orgaoRow of orgaosRows as any[]) {
+      const [contatosRows] = await connection.execute(
+        'SELECT id, nome, cargo, email, telefone FROM orgao_contatos WHERE orgao_id = ? ORDER BY nome ASC',
+        [orgaoRow.id]
       );
+      orgaosFormatados.push(formatarOrgaoMySQL(orgaoRow, contatosRows as any[]));
     }
     
-    // Formatar os dados para o formato esperado pelo frontend
-    const orgaos = data.map(formatarOrgao);
-    
-    return NextResponse.json(orgaos);
-  } catch (error) {
-    console.error('Erro ao listar órgãos:', error);
+    return NextResponse.json(orgaosFormatados);
+
+  } catch (error: any) {
+    console.error('Erro ao listar órgãos (MySQL):', error);
     return NextResponse.json(
-      { error: 'Erro interno ao processar órgãos' },
+      { error: 'Erro interno ao processar órgãos', details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (connection) await connection.release();
   }
 }
 
 // POST - Criar novo órgão
 export async function POST(request: NextRequest) {
+  let connection;
+  console.log("POST /api/licitacoes/orgaos - Iniciando criação com MySQL");
   try {
     const data = await request.json();
+    console.log("Dados recebidos para POST:", data);
     
-    // Validar dados básicos
     if (!data.nome) {
-      return NextResponse.json(
-        { error: 'Nome do órgão é obrigatório' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Nome do órgão é obrigatório' }, { status: 400 });
     }
     
-    // Extrair contatos para inserção separada
+    connection = await getDbConnection();
+    await connection.beginTransaction();
+
     const { contatos, ...orgaoData } = data;
-    
-    // Preparar o objeto para inserção
-    const orgao = {
+    const newOrgaoId = uuidv4();
+
+    const orgaoDb = {
+      id: newOrgaoId,
       nome: orgaoData.nome,
-      tipo: orgaoData.tipo,
-      cnpj: orgaoData.cnpj,
-      endereco: orgaoData.endereco,
-      cidade: orgaoData.cidade,
-      estado: orgaoData.estado,
-      segmento: orgaoData.segmento,
-      origem_lead: orgaoData.origemLead,
-      responsavel_interno: orgaoData.responsavelInterno,
-      descricao: orgaoData.descricao,
-      observacoes: orgaoData.observacoes,
-      faturamento: orgaoData.faturamento,
-      ativo: orgaoData.ativo !== false // Default true
+      tipo: orgaoData.tipo || null,
+      cnpj: orgaoData.cnpj || null,
+      endereco: orgaoData.endereco || null,
+      cidade: orgaoData.cidade || null,
+      estado: orgaoData.estado || null,
+      segmento: orgaoData.segmento || null,
+      origem_lead: orgaoData.origemLead || null, // Frontend: origemLead
+      responsavel_interno: orgaoData.responsavelInterno || null, // Frontend: responsavelInterno
+      descricao: orgaoData.descricao || null,
+      observacoes: orgaoData.observacoes || null,
+      faturamento: orgaoData.faturamento || null,
+      ativo: orgaoData.ativo !== undefined ? (Boolean(orgaoData.ativo) ? 1 : 0) : 1, // Default true
+      // data_criacao e data_atualizacao são definidos por NOW()
     };
     
-    // Inserir o órgão
-    const { data: orgaoInserido, error } = await crmonefactory
-      .from('orgaos')
-      .insert(orgao)
-      .select()
-      .single();
-    
-    if (error) {
-      console.error('Erro ao criar órgão:', error);
-      return NextResponse.json(
-        { error: 'Erro ao criar órgão: ' + error.message },
-        { status: 500 }
-      );
-    }
-    
-    // Inserir contatos associados, se houver
-    if (contatos && contatos.length > 0 && orgaoInserido.id) {
-      const contatosParaInserir = contatos.map((contato: any) => ({
-        orgao_id: orgaoInserido.id,
-        nome: contato.nome,
-        cargo: contato.cargo,
-        email: contato.email,
-        telefone: contato.telefone
-      }));
-      
-      const { error: contatosError } = await crmonefactory
-        .from('orgao_contatos')
-        .insert(contatosParaInserir);
-      
-      if (contatosError) {
-        console.error('Erro ao inserir contatos do órgão:', contatosError);
+    const orgaoFields = Object.keys(orgaoDb);
+    const orgaoPlaceholders = orgaoFields.map(() => '?').join(', ');
+    const orgaoValues = Object.values(orgaoDb);
+
+    const sqlInsertOrgao = `INSERT INTO orgaos (${orgaoFields.join(', ')}, data_criacao, data_atualizacao) VALUES (${orgaoPlaceholders}, NOW(), NOW())`;
+    await connection.execute(sqlInsertOrgao, orgaoValues);
+    console.log("Órgão inserido com ID:", newOrgaoId);
+
+    let insertedContatos: any[] = [];
+    if (contatos && Array.isArray(contatos) && contatos.length > 0) {
+      for (const contato of contatos) {
+        const newContatoId = uuidv4();
+        const contatoDb = {
+          id: newContatoId,
+          orgao_id: newOrgaoId,
+          nome: contato.nome,
+          cargo: contato.cargo || null,
+          email: contato.email || null,
+          telefone: contato.telefone || null,
+        };
+        const contatoFields = Object.keys(contatoDb);
+        const contatoPlaceholders = contatoFields.map(() => '?').join(', ');
+        const contatoValues = Object.values(contatoDb);
+
+        const sqlInsertContato = `INSERT INTO orgao_contatos (${contatoFields.join(', ')}, data_criacao, data_atualizacao) VALUES (${contatoPlaceholders}, NOW(), NOW())`;
+        await connection.execute(sqlInsertContato, contatoValues);
+        insertedContatos.push({...contatoDb, data_criacao: new Date().toISOString(), data_atualizacao: new Date().toISOString()}); // Simula o retorno
       }
+      console.log(`${insertedContatos.length} contatos inseridos para o órgão ID:`, newOrgaoId);
     }
     
-    // Buscar o órgão completo com contatos
-    const { data: orgaoCompleto, error: fetchError } = await crmonefactory
-      .from('orgaos')
-      .select(`
-        *,
-        orgao_contatos (
-          id, 
-          nome,
-          cargo,
-          email,
-          telefone
-        )
-      `)
-      .eq('id', orgaoInserido.id)
-      .single();
+    await connection.commit();
+    console.log("Transação MySQL commitada.");
+
+    // Construir o objeto de resposta formatado
+    const orgaoCriadoFormatado = formatarOrgaoMySQL(
+        {...orgaoDb, data_criacao: new Date().toISOString(), data_atualizacao: new Date().toISOString() }, // Simula o retorno do DB
+        insertedContatos
+    );
     
-    if (fetchError) {
-      console.error('Erro ao buscar órgão completo:', fetchError);
-      // Retornar o órgão mesmo sem os contatos
-      return NextResponse.json(formatarOrgao(orgaoInserido), { status: 201 });
-    }
-    
-    return NextResponse.json(formatarOrgao(orgaoCompleto), { status: 201 });
-  } catch (error) {
-    console.error('Erro ao criar órgão:', error);
+    return NextResponse.json(orgaoCriadoFormatado, { status: 201 });
+
+  } catch (error: any) {
+    console.error('Erro ao criar órgão (MySQL):', error);
+    if (connection) await connection.rollback().catch((rbError: any) => console.error("Erro ao reverter transação:", rbError.message));
     return NextResponse.json(
-      { error: 'Erro interno ao criar órgão' },
+      { error: 'Erro interno ao criar órgão', details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (connection) await connection.release();
   }
-}
-
-// Função auxiliar para formatar o órgão no formato esperado pelo frontend
-function formatarOrgao(item: any): Orgao {
-  return {
-    id: item.id,
-    nome: item.nome,
-    tipo: item.tipo,
-    cnpj: item.cnpj,
-    endereco: item.endereco,
-    cidade: item.cidade,
-    estado: item.estado,
-    segmento: item.segmento,
-    origemLead: item.origem_lead,
-    responsavelInterno: item.responsavel_interno,
-    descricao: item.descricao,
-    observacoes: item.observacoes,
-    faturamento: item.faturamento,
-    contatos: item.orgao_contatos ? item.orgao_contatos.map((contato: any) => ({
-      id: contato.id,
-      nome: contato.nome,
-      cargo: contato.cargo,
-      email: contato.email,
-      telefone: contato.telefone
-    })) : [],
-    dataCriacao: item.data_criacao,
-    dataAtualizacao: item.data_atualizacao,
-    ativo: item.ativo
-  };
 }

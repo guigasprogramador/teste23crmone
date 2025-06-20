@@ -1,295 +1,384 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase, crmonefactory } from '@/lib/supabase/client';
+import { getDbConnection } from '@/lib/mysql/client';
+import { v4 as uuidv4 } from 'uuid';
+import { verifyJwtToken } from "@/lib/auth/jwt"; // JWT verification
+
+// Helper para formatar data YYYY-MM-DD para DD/MM/YYYY (se necessário para frontend)
+function formatDateToDDMMYYYY(dateString: string | null): string | undefined {
+    if (!dateString) return undefined;
+    try {
+        const date = new Date(dateString);
+        // Ajuste para UTC para evitar problemas de fuso horário ao formatar
+        if (isNaN(date.getTime())) return undefined; // Invalid date
+        return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()).toLocaleDateString('pt-BR');
+    } catch (e) {
+        return undefined;
+    }
+}
+
+// Função auxiliar para formatar o documento no formato esperado pelo frontend
+function formatarDocumentoMySQL(item: any): any { // Ajustar 'any' para um tipo Documento mais preciso
+  return {
+    id: item.id,
+    nome: item.nome,
+    tipo: item.tipo,
+    urlDocumento: item.url_documento,
+    arquivoPath: item.arquivo_path,
+    formato: item.formato,
+    tamanho: item.tamanho,
+    status: item.status,
+    criadoPor: item.criado_por, // User ID
+    criadoPorNome: item.criado_por_nome, // User Name from join
+    dataCriacao: item.data_criacao,
+    dataAtualizacao: item.data_atualizacao,
+    licitacaoId: item.licitacao_id,
+    licitacaoTitulo: item.licitacao_titulo,
+    descricao: item.descricao,
+    numeroDocumento: item.numero_documento,
+    dataValidade: formatDateToDDMMYYYY(item.data_validade),
+    categoriaLegado: item.categoria_legado, // Mantendo o campo legado se existir no DB
+    tags: item.tags_concatenadas ? item.tags_concatenadas.split(', ') : [],
+  };
+}
+
 
 // GET - Obter todos os documentos ou filtrar por parâmetros
 export async function GET(request: NextRequest) {
+  let connection;
+  console.log("GET /api/documentos/doc - Iniciando consulta com MySQL");
   try {
-    // Verificar autenticação
-    const token = request.headers.get('authorization')?.split(' ')[1];
-    if (!token) {
-      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
+    }
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await verifyJwtToken(token);
+    if (!decodedToken || !decodedToken.userId) {
+      return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
     }
 
-    // Obter parâmetros da URL
     const { searchParams } = new URL(request.url);
+    connection = await getDbConnection();
+
+    let sql = `
+      SELECT
+          d.id, d.nome, d.tipo, d.url_documento, d.arquivo_path, d.formato,
+          d.tamanho, d.status, d.criado_por, u_creator.name as criado_por_nome,
+          d.data_criacao, d.data_atualizacao,
+          d.licitacao_id, l.titulo as licitacao_titulo,
+          d.descricao, d.numero_documento, d.data_validade, d.categoria AS categoria_legado,
+          (SELECT GROUP_CONCAT(t.nome SEPARATOR ', ')
+           FROM tags t JOIN documentos_tags dt ON t.id = dt.tag_id
+           WHERE dt.documento_id = d.id) as tags_concatenadas
+      FROM documentos d
+      LEFT JOIN licitacoes l ON d.licitacao_id = l.id
+      LEFT JOIN users u_creator ON d.criado_por = u_creator.id
+    `;
+    const conditions: string[] = [];
+    const paramsSql: any[] = [];
+
     const licitacaoId = searchParams.get('licitacaoId');
+    if (licitacaoId) { conditions.push('d.licitacao_id = ?'); paramsSql.push(licitacaoId); }
+
     const tipo = searchParams.get('tipo');
-    const categoria = searchParams.get('categoria');
-    const status = searchParams.get('status') || 'ativo';
+    if (tipo) { conditions.push('d.tipo = ?'); paramsSql.push(tipo); }
 
-    // Construir a consulta base
-    let query = crmonefactory.from('doc').select('*');
+    const statusParam = searchParams.get('status');
+    if (statusParam) { conditions.push('d.status = ?'); paramsSql.push(statusParam); }
 
-    // Aplicar filtros se fornecidos
-    if (licitacaoId) {
-      query = query.eq('licitacao_id', licitacaoId);
-    }
-    if (tipo) {
-      query = query.eq('tipo', tipo);
-    }
-    if (categoria) {
-      query = query.eq('categoria', categoria);
-    }
-    if (status) {
-      query = query.eq('status', status);
+    const tagNome = searchParams.get('tagNome');
+    if (tagNome) {
+      conditions.push('EXISTS (SELECT 1 FROM documentos_tags dt_filter JOIN tags t_filter ON dt_filter.tag_id = t_filter.id WHERE dt_filter.documento_id = d.id AND t_filter.nome = ?)');
+      paramsSql.push(tagNome);
     }
 
-    // Ordenar por data de criação (mais recentes primeiro)
-    query = query.order('data_criacao', { ascending: false });
-
-    // Executar a consulta
-    const { data, error } = await query;
-
-    if (error) {
-      console.error('Erro ao buscar documentos:', error);
-      return NextResponse.json({ error: 'Erro ao buscar documentos' }, { status: 500 });
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
     }
+    sql += ' GROUP BY d.id ORDER BY d.data_criacao DESC';
 
-    return NextResponse.json({ 
-      success: true, 
-      documentos: data || []
-    });
+    console.log("Executando SQL GET Documentos:", sql, paramsSql);
+    const [rows] = await connection.execute(sql, paramsSql);
+
+    const documentos = (rows as any[]).map(formatarDocumentoMySQL);
+    return NextResponse.json({ success: true, documentos: documentos || [] });
+
   } catch (error: any) {
-    console.error('Erro ao processar requisição de documentos:', error);
+    console.error('Erro ao processar requisição de documentos (MySQL):', error);
+    if (error.message === 'jwt expired' || error.message.includes('invalid token')) {
+        return NextResponse.json({ error: 'Não autorizado: token inválido ou expirado' }, { status: 401 });
+    }
     return NextResponse.json(
-      { error: 'Erro interno do servidor: ' + error.message },
+      { error: 'Erro interno do servidor: ' + error.message, details: error.code },
       { status: 500 }
     );
+  } finally {
+    if (connection) await connection.release();
   }
 }
 
-// POST - Criar um novo documento (metadados apenas, sem upload de arquivo)
+// POST - Criar um novo documento (metadados apenas)
 export async function POST(request: NextRequest) {
+  let connection;
+  console.log("POST /api/documentos/doc - Iniciando criação com MySQL");
   try {
-    // Verificar autenticação
-    const token = request.headers.get('authorization')?.split(' ')[1];
-    if (!token) {
-      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await verifyJwtToken(token);
+    if (!decodedToken || !decodedToken.userId) {
+      return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
+    }
+    const userIdFromToken = decodedToken.userId;
 
-    // Obter dados do corpo da requisição
     const body = await request.json();
+    console.log("Dados recebidos para POST Documento:", body);
     
-    // Validar campos obrigatórios
-    if (!body.nome || !body.tipo || !body.categoria) {
-      return NextResponse.json(
-        { error: 'Nome, tipo e categoria são campos obrigatórios' },
-        { status: 400 }
-      );
+    if (!body.nome || !body.tipo ) { // licitacaoId pode ser opcional para documentos gerais
+      return NextResponse.json({ error: 'Nome e tipo são campos obrigatórios' }, { status: 400 });
     }
 
-    // Data atual para os campos de auditoria
-    const dataAtual = new Date().toISOString();
-    
-    // Inserir documento na tabela doc
-    const { data, error } = await crmonefactory
-      .from('doc')
-      .insert([
-        {
-          nome: body.nome,
-          tipo: body.tipo,
-          categoria: body.categoria,
-          descricao: body.descricao || null,
-          licitacao_id: body.licitacaoId || null,
-          numero_documento: body.numeroDocumento || null,
-          data_validade: body.dataValidade || null,
-          url_documento: body.urlDocumento || null,
-          arquivo_path: body.arquivoPath || null,
-          formato: body.formato || null,
-          tamanho: body.tamanho || null,
-          status: 'ativo',
-          criado_por: body.criadoPor || null,
-          data_criacao: dataAtual,
-          data_atualizacao: dataAtual
+    connection = await getDbConnection();
+    await connection.beginTransaction();
+
+    const newDocumentId = uuidv4();
+    const placeholderUrl = `pending_storage_solution/file_url/${newDocumentId}/${body.nome}`;
+    const placeholderPath = `pending_storage_solution/file_path/${newDocumentId}/${body.nome}`;
+    console.warn(`AVISO: Upload de arquivo real não implementado. Usando placeholders: URL=${placeholderUrl}, Path=${placeholderPath}`);
+
+    const documentoDb = {
+      id: newDocumentId,
+      nome: body.nome,
+      tipo: body.tipo,
+      licitacao_id: body.licitacaoId || null,
+      criado_por: userIdFromToken,
+      url_documento: placeholderUrl,
+      arquivo_path: placeholderPath,
+      formato: body.formato || null,
+      tamanho: body.tamanho || 0,
+      status: body.status || 'ativo',
+      descricao: body.descricao || null,
+      numero_documento: body.numeroDocumento || null,
+      data_validade: body.dataValidade ? new Date(body.dataValidade).toISOString().split('T')[0] : null,
+      categoria: body.categoriaLegado || null, // Manter o campo legado
+    };
+
+    const fields = Object.keys(documentoDb);
+    const placeholders = fields.map(() => '?').join(', ');
+    const values = Object.values(documentoDb);
+
+    const sqlInsert = `INSERT INTO documentos (${fields.join(', ')}, data_criacao, data_atualizacao) VALUES (${placeholders}, NOW(), NOW())`;
+    await connection.execute(sqlInsert, values);
+    console.log("Documento (metadados) inserido com ID:", newDocumentId);
+
+    if (body.tags && Array.isArray(body.tags) && body.tags.length > 0) {
+      for (const tagName of body.tags) {
+        if (typeof tagName !== 'string' || tagName.trim() === '') continue;
+        let [tagRows]: any = await connection.execute('SELECT id FROM tags WHERE nome = ?', [tagName.trim()]);
+        let tagId;
+        if (tagRows.length > 0) {
+          tagId = tagRows[0].id;
+        } else {
+          tagId = uuidv4();
+          await connection.execute('INSERT INTO tags (id, nome, created_at, updated_at) VALUES (?, ?, NOW(), NOW())', [tagId, tagName.trim()]);
         }
-      ])
-      .select();
-
-    if (error) {
-      console.error('Erro ao criar documento:', error);
-      return NextResponse.json(
-        { error: 'Erro ao criar documento: ' + error.message },
-        { status: 500 }
-      );
+        await connection.execute('INSERT INTO documentos_tags (documento_id, tag_id) VALUES (?, ?)', [newDocumentId, tagId]);
+      }
     }
+
+    await connection.commit();
+
+    // Fetch e formatar para resposta
+    const [createdDocRows]: any = await connection.execute(
+      `SELECT d.*, l.titulo as licitacao_titulo, u.name as criado_por_nome,
+              (SELECT GROUP_CONCAT(t.nome SEPARATOR ', ') FROM tags t JOIN documentos_tags dt ON t.id = dt.tag_id WHERE dt.documento_id = d.id) as tags_concatenadas
+       FROM documentos d
+       LEFT JOIN licitacoes l ON d.licitacao_id = l.id
+       LEFT JOIN users u ON d.criado_por = u.id
+       WHERE d.id = ? GROUP BY d.id`, [newDocumentId]
+    );
 
     return NextResponse.json({
       success: true,
-      message: 'Documento criado com sucesso',
-      documento: data[0]
+      message: 'Documento (metadados) criado com sucesso. Upload de arquivo pendente.',
+      documento: formatarDocumentoMySQL(createdDocRows[0])
     }, { status: 201 });
+
   } catch (error: any) {
-    console.error('Erro ao processar criação de documento:', error);
+    console.error('Erro ao processar criação de documento (MySQL):', error);
+    if (connection) await connection.rollback().catch(rbError => console.error("Erro no rollback:", rbError));
+     if (error.message === 'jwt expired' || error.message.includes('invalid token')) {
+        return NextResponse.json({ error: 'Não autorizado: token inválido ou expirado' }, { status: 401 });
+    }
     return NextResponse.json(
-      { error: 'Erro interno do servidor: ' + error.message },
+      { error: 'Erro interno do servidor: ' + error.message, details: error.code },
       { status: 500 }
     );
+  } finally {
+    if (connection) await connection.release();
   }
 }
 
 // PATCH - Atualizar um documento existente
 export async function PATCH(request: NextRequest) {
+  let connection;
+  console.log("PATCH /api/documentos/doc - Iniciando atualização com MySQL");
   try {
-    // Verificar autenticação
-    const token = request.headers.get('authorization')?.split(' ')[1];
-    if (!token) {
-      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await verifyJwtToken(token); // Valida e decodifica
+    if (!decodedToken || !decodedToken.userId) {
+      return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
+    }
+    // const userIdFromToken = decodedToken.userId; // Para verificação de permissão, se necessário
 
-    // Obter dados do corpo da requisição
     const body = await request.json();
+    console.log("Dados recebidos para PATCH Documento:", body);
     
-    // Validar ID do documento
     if (!body.id) {
-      return NextResponse.json(
-        { error: 'ID do documento é obrigatório para atualização' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'ID do documento é obrigatório para atualização' }, { status: 400 });
     }
 
-    // Preparar dados para atualização
+    connection = await getDbConnection();
+    await connection.beginTransaction();
+    
     const updateData: any = {};
+    const allowedFields = ['nome', 'tipo', 'descricao', 'numeroDocumento', 'dataValidade', 'status', 'categoriaLegado', 'licitacaoId'];
+    // urlDocumento e arquivoPath não são atualizáveis diretamente aqui (ligado ao upload)
     
-    // Adicionar apenas campos que foram fornecidos
-    if (body.nome !== undefined) updateData.nome = body.nome;
-    if (body.tipo !== undefined) updateData.tipo = body.tipo;
-    if (body.categoria !== undefined) updateData.categoria = body.categoria;
-    if (body.descricao !== undefined) updateData.descricao = body.descricao;
-    if (body.numeroDocumento !== undefined) updateData.numero_documento = body.numeroDocumento;
-    if (body.dataValidade !== undefined) updateData.data_validade = body.dataValidade;
-    if (body.urlDocumento !== undefined) updateData.url_documento = body.urlDocumento;
-    if (body.status !== undefined) updateData.status = body.status;
-    
-    // Data de atualização sempre é atualizada
-    updateData.data_atualizacao = new Date().toISOString();
+    for (const key of allowedFields) {
+        if (body[key] !== undefined) {
+            let dbKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`); // camelToSnake
+            if (key === 'categoriaLegado') dbKey = 'categoria';
+            if (key === 'numeroDocumento') dbKey = 'numero_documento';
+            if (key === 'dataValidade') dbKey = 'data_validade';
+            if (key === 'licitacaoId') dbKey = 'licitacao_id';
 
-    // Atualizar documento na tabela doc
-    const { data, error } = await crmonefactory
-      .from('doc')
-      .update(updateData)
-      .eq('id', body.id)
-      .select();
-
-    if (error) {
-      console.error('Erro ao atualizar documento:', error);
-      return NextResponse.json(
-        { error: 'Erro ao atualizar documento: ' + error.message },
-        { status: 500 }
-      );
+            updateData[dbKey] = (key === 'dataValidade' && body[key]) ? new Date(body[key]).toISOString().split('T')[0] : body[key];
+        }
     }
 
-    if (!data || data.length === 0) {
-      return NextResponse.json(
-        { error: 'Documento não encontrado' },
-        { status: 404 }
-      );
+    if (Object.keys(updateData).length > 0) {
+        updateData.updated_at = new Date(); // Manual update for timestamp
+        const fieldPlaceholders = Object.keys(updateData).map(k => `${k} = ?`).join(', ');
+        const values = [...Object.values(updateData), body.id];
+        const sqlUpdate = `UPDATE documentos SET ${fieldPlaceholders} WHERE id = ?`;
+        const [result]:any = await connection.execute(sqlUpdate, values);
+        if (result.affectedRows === 0) {
+            await connection.rollback();
+            return NextResponse.json({ error: 'Documento não encontrado para atualização' }, { status: 404 });
+        }
     }
+
+    if (body.hasOwnProperty('tags') && Array.isArray(body.tags)) {
+      await connection.execute('DELETE FROM documentos_tags WHERE documento_id = ?', [body.id]);
+      if (body.tags.length > 0) {
+        for (const tagName of body.tags) {
+          if (typeof tagName !== 'string' || tagName.trim() === '') continue;
+          let [tagRows]: any = await connection.execute('SELECT id FROM tags WHERE nome = ?', [tagName.trim()]);
+          let tagId;
+          if (tagRows.length > 0) {
+            tagId = tagRows[0].id;
+          } else {
+            tagId = uuidv4();
+            await connection.execute('INSERT INTO tags (id, nome, created_at, updated_at) VALUES (?, ?, NOW(), NOW())', [tagId, tagName.trim()]);
+          }
+          await connection.execute('INSERT INTO documentos_tags (documento_id, tag_id) VALUES (?, ?)', [body.id, tagId]);
+        }
+      }
+    }
+
+    await connection.commit();
+
+    const [updatedDocRows]: any = await connection.execute(
+         `SELECT d.*, l.titulo as licitacao_titulo, u.name as criado_por_nome,
+              (SELECT GROUP_CONCAT(t.nome SEPARATOR ', ') FROM tags t JOIN documentos_tags dt ON t.id = dt.tag_id WHERE dt.documento_id = d.id) as tags_concatenadas
+       FROM documentos d
+       LEFT JOIN licitacoes l ON d.licitacao_id = l.id
+       LEFT JOIN users u ON d.criado_por = u.id
+       WHERE d.id = ? GROUP BY d.id`, [body.id]
+    );
 
     return NextResponse.json({
       success: true,
       message: 'Documento atualizado com sucesso',
-      documento: data[0]
+      documento: formatarDocumentoMySQL(updatedDocRows[0])
     });
   } catch (error: any) {
-    console.error('Erro ao processar atualização de documento:', error);
+    console.error('Erro ao processar atualização de documento (MySQL):', error);
+    if (connection) await connection.rollback().catch(rbError => console.error("Erro no rollback:", rbError));
+    if (error.message === 'jwt expired' || error.message.includes('invalid token')) {
+        return NextResponse.json({ error: 'Não autorizado: token inválido ou expirado' }, { status: 401 });
+    }
     return NextResponse.json(
-      { error: 'Erro interno do servidor: ' + error.message },
+      { error: 'Erro interno do servidor: ' + error.message, details: error.code },
       { status: 500 }
     );
+  } finally {
+    if (connection) await connection.release();
   }
 }
 
 // DELETE - Excluir ou marcar um documento como excluído
 export async function DELETE(request: NextRequest) {
+  let connection;
+  console.log("DELETE /api/documentos/doc - Iniciando exclusão com MySQL");
   try {
-    // Verificar autenticação
-    const token = request.headers.get('authorization')?.split(' ')[1];
-    if (!token) {
-      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await verifyJwtToken(token);
+    if (!decodedToken || !decodedToken.userId) {
+      return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
+    }
+    // const userIdFromToken = decodedToken.userId; // Para verificação de permissão, se necessário
 
-    // Obter ID do documento
     const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
+    const id = searchParams.get('id'); // ID do documento
     
     if (!id) {
-      return NextResponse.json(
-        { error: 'ID do documento é obrigatório para exclusão' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'ID do documento é obrigatório para exclusão' }, { status: 400 });
     }
 
-    // Verificar se é para excluir fisicamente ou apenas marcar como excluído
     const excluirFisicamente = searchParams.get('fisicamente') === 'true';
+    connection = await getDbConnection();
     
     if (excluirFisicamente) {
-      // Primeiro, obter o path do arquivo para excluí-lo do storage
-      const { data: docData, error: fetchError } = await crmonefactory
-        .from('doc')
-        .select('arquivo_path')
-        .eq('id', id)
-        .single();
-        
-      if (fetchError) {
-        console.error('Erro ao buscar documento para exclusão:', fetchError);
-        return NextResponse.json(
-          { error: 'Erro ao buscar documento para exclusão' },
-          { status: 500 }
-        );
-      }
-      
-      // Se houver um arquivo associado, excluí-lo do storage
-      if (docData && docData.arquivo_path) {
-        const { error: storageError } = await supabase.storage
-          .from('documentos')
-          .remove([docData.arquivo_path]);
-          
-        if (storageError) {
-          console.error('Erro ao excluir arquivo do storage:', storageError);
-          // Continue mesmo com erro, para pelo menos excluir o registro
-        }
-      }
-      
-      // Excluir o registro do banco de dados
-      const { error: deleteError } = await crmonefactory
-        .from('doc')
-        .delete()
-        .eq('id', id);
-        
-      if (deleteError) {
-        console.error('Erro ao excluir documento do banco de dados:', deleteError);
-        return NextResponse.json(
-          { error: 'Erro ao excluir documento do banco de dados' },
-          { status: 500 }
-        );
+      console.warn(`AVISO: Exclusão física do arquivo de storage para documento ${id} NÃO está implementada.`);
+      // ON DELETE CASCADE na FK de documentos_tags para documento_id cuidará da limpeza em documentos_tags.
+      const [result]: any = await connection.execute('DELETE FROM documentos WHERE id = ?', [id]);
+      if (result.affectedRows === 0) {
+        return NextResponse.json({ error: 'Documento não encontrado para exclusão física' }, { status: 404 });
       }
     } else {
-      // Apenas marcar como excluído (soft delete)
-      const { error: updateError } = await crmonefactory
-        .from('doc')
-        .update({ 
-          status: 'excluido',
-          data_atualizacao: new Date().toISOString()
-        })
-        .eq('id', id);
-        
-      if (updateError) {
-        console.error('Erro ao marcar documento como excluído:', updateError);
-        return NextResponse.json(
-          { error: 'Erro ao marcar documento como excluído' },
-          { status: 500 }
-        );
+      // Soft delete
+      const [result]: any = await connection.execute(
+        "UPDATE documentos SET status = 'excluido', updated_at = NOW() WHERE id = ?",
+        [id]
+      );
+      if (result.affectedRows === 0) {
+        return NextResponse.json({ error: 'Documento não encontrado para marcar como excluído' }, { status: 404 });
       }
     }
 
     return NextResponse.json({
       success: true,
       message: excluirFisicamente 
-        ? 'Documento excluído permanentemente com sucesso'
-        : 'Documento marcado como excluído com sucesso'
+        ? 'Documento excluído permanentemente com sucesso (registro no DB).'
+        : 'Documento marcado como excluído com sucesso.'
     });
   } catch (error: any) {
-    console.error('Erro ao processar exclusão de documento:', error);
+    console.error('Erro ao processar exclusão de documento (MySQL):', error);
+    if (error.message === 'jwt expired' || error.message.includes('invalid token')) {
+        return NextResponse.json({ error: 'Não autorizado: token inválido ou expirado' }, { status: 401 });
+    }
     return NextResponse.json(
       { error: 'Erro interno do servidor: ' + error.message },
       { status: 500 }

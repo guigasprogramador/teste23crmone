@@ -1,225 +1,214 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Documento } from '@/types/licitacoes';
-import * as fs from 'fs';
-import * as path from 'path';
+// import { Documento } from '@/types/licitacoes'; // Type might need adjustment
+import { getDbConnection } from '@/lib/mysql/client';
+import { v4 as uuidv4 } from 'uuid';
+import { verifyJwtToken } from "@/lib/auth/jwt";
 
-// Path para o arquivo de "banco de dados"
-const dbPath = path.join(process.cwd(), 'data', 'documentos.json');
-
-// Função para carregar os dados do arquivo
-async function carregarDocumentos(): Promise<Documento[]> {
-  try {
-    // Garantir que o diretório existe
-    const dir = path.dirname(dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+// Helper para formatar data YYYY-MM-DD para DD/MM/YYYY (se necessário para frontend)
+function formatDateToDDMMYYYY(dateString: string | null): string | undefined {
+    if (!dateString) return undefined;
+    try {
+        const date = new Date(dateString);
+        if (isNaN(date.getTime())) return undefined; // Invalid date
+        return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()).toLocaleDateString('pt-BR');
+    } catch(e) {
+        return undefined;
     }
-    
-    // Criar arquivo se não existir
-    if (!fs.existsSync(dbPath)) {
-      // Dados iniciais para o "banco de dados"
-      const documentosIniciais: Documento[] = [
-        {
-          id: "1",
-          nome: "Edital_Pregao_123.pdf",
-          tipo: "Edital",
-          url: "/documentos/sample/edital_pregao_123.pdf",
-          dataCriacao: "2023-01-10T10:30:00Z",
-          dataAtualizacao: "2023-01-10T10:30:00Z",
-          licitacaoId: "1",
-          tamanho: 2500000,
-          arquivo: "Edital_Pregao_123.pdf",
-        },
-        {
-          id: "2",
-          nome: "Proposta_Comercial.docx",
-          tipo: "Proposta",
-          url: "/documentos/sample/proposta_comercial.docx",
-          dataCriacao: "2023-01-15T14:20:00Z",
-          dataAtualizacao: "2023-01-15T14:20:00Z",
-          licitacaoId: "2",
-          tamanho: 1800000,
-          arquivo: "Proposta_Comercial.docx",
-        },
-        {
-          id: "3",
-          nome: "Certidao_Negativa.pdf",
-          tipo: "Certidão",
-          url: "/documentos/sample/certidao_negativa.pdf",
-          dataCriacao: "2023-02-05T09:15:00Z",
-          dataAtualizacao: "2023-02-05T09:15:00Z",
-          licitacaoId: "1",
-          tamanho: 500000,
-          arquivo: "Certidao_Negativa.pdf",
-        },
-        {
-          id: "4",
-          nome: "Contrato_Assinado.pdf",
-          tipo: "Contrato",
-          url: "/documentos/sample/contrato_assinado.pdf",
-          dataCriacao: "2023-03-10T16:45:00Z",
-          dataAtualizacao: "2023-03-10T16:45:00Z",
-          licitacaoId: "3",
-          tamanho: 3200000,
-          arquivo: "Contrato_Assinado.pdf",
-        },
-        {
-          id: "5",
-          nome: "Planilha_Orcamento.xlsx",
-          tipo: "Planilha",
-          url: "/documentos/sample/planilha_orcamento.xlsx",
-          dataCriacao: "2023-04-20T11:30:00Z",
-          dataAtualizacao: "2023-04-20T11:30:00Z",
-          licitacaoId: "4",
-          tamanho: 1200000,
-          arquivo: "Planilha_Orcamento.xlsx",
-        },
-        {
-          id: "6",
-          nome: "Termo_Referencia.pdf",
-          tipo: "Termo de Referência",
-          url: "/documentos/sample/termo_referencia.pdf",
-          dataCriacao: "2023-05-15T13:20:00Z",
-          dataAtualizacao: "2023-05-15T13:20:00Z",
-          licitacaoId: "2",
-          tamanho: 4500000,
-          arquivo: "Termo_Referencia.pdf",
-        },
-        {
-          id: "7",
-          nome: "Procuracao.pdf",
-          tipo: "Procuração",
-          url: "/documentos/sample/procuracao.pdf",
-          dataCriacao: "2023-06-08T10:10:00Z",
-          dataAtualizacao: "2023-06-08T10:10:00Z",
-          licitacaoId: "5",
-          tamanho: 800000,
-          arquivo: "Procuracao.pdf",
-        },
-      ];
-      
-      fs.writeFileSync(dbPath, JSON.stringify(documentosIniciais, null, 2));
-      return documentosIniciais;
-    }
-    
-    // Ler do arquivo
-    const data = fs.readFileSync(dbPath, 'utf8');
-    return JSON.parse(data);
-  } catch (error) {
-    console.error('Erro ao carregar documentos:', error);
-    return [];
-  }
 }
 
-// Função para salvar os dados no arquivo
-async function salvarDocumentos(documentos: Documento[]): Promise<void> {
-  try {
-    const dir = path.dirname(dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(dbPath, JSON.stringify(documentos, null, 2));
-  } catch (error) {
-    console.error('Erro ao salvar documentos:', error);
-  }
+// Função auxiliar para formatar o documento no formato esperado pelo frontend
+// Similar to the one in ./doc/route.ts
+function formatarDocumentoMySQL(item: any): any {
+  return {
+    id: item.id,
+    nome: item.nome,
+    tipo: item.tipo,
+    urlDocumento: item.url_documento, // Placeholder
+    arquivoPath: item.arquivo_path,   // Placeholder
+    formato: item.formato,
+    tamanho: item.tamanho,
+    status: item.status,
+    criadoPor: item.criado_por,
+    criadoPorNome: item.criado_por_nome,
+    dataCriacao: item.data_criacao,
+    dataAtualizacao: item.data_atualizacao,
+    licitacaoId: item.licitacao_id,
+    licitacaoTitulo: item.licitacao_titulo,
+    descricao: item.descricao,
+    numeroDocumento: item.numero_documento,
+    dataValidade: formatDateToDDMMYYYY(item.data_validade),
+    categoriaLegado: item.categoria_legado,
+    tags: item.tags_concatenadas ? item.tags_concatenadas.split(', ') : [],
+  };
 }
 
 // GET - Listar todos os documentos ou filtrar
 export async function GET(request: NextRequest) {
+  let connection;
+  console.log("GET /api/documentos - Iniciando consulta com MySQL");
   try {
-    const documentos = await carregarDocumentos();
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
+    }
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await verifyJwtToken(token);
+    if (!decodedToken || !decodedToken.userId) {
+      return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
+    connection = await getDbConnection();
+
+    let sql = `
+      SELECT
+          d.id, d.nome, d.tipo, d.url_documento, d.arquivo_path, d.formato,
+          d.tamanho, d.status, d.criado_por, u_creator.name as criado_por_nome,
+          d.data_criacao, d.data_atualizacao,
+          d.licitacao_id, l.titulo as licitacao_titulo,
+          d.descricao, d.numero_documento, d.data_validade, d.categoria AS categoria_legado,
+          (SELECT GROUP_CONCAT(t.nome SEPARATOR ', ')
+           FROM tags t JOIN documentos_tags dt ON t.id = dt.tag_id
+           WHERE dt.documento_id = d.id) as tags_concatenadas
+      FROM documentos d
+      LEFT JOIN licitacoes l ON d.licitacao_id = l.id
+      LEFT JOIN users u_creator ON d.criado_por = u_creator.id
+    `;
+    const conditions: string[] = [];
+    const paramsSql: any[] = [];
+
+    const termo = searchParams.get('termo');
+    if (termo) { conditions.push('d.nome LIKE ?'); paramsSql.push(`%${termo}%`); }
     
-    // Parâmetros de filtro
-    const termo = searchParams.get('termo')?.toLowerCase();
     const tipo = searchParams.get('tipo');
+    if (tipo && tipo !== 'todos') { conditions.push('d.tipo = ?'); paramsSql.push(tipo); }
+    
     const licitacaoId = searchParams.get('licitacaoId');
+    if (licitacaoId && licitacaoId !== 'todos') { conditions.push('d.licitacao_id = ?'); paramsSql.push(licitacaoId); }
+    
     const dataInicio = searchParams.get('dataInicio');
+    if (dataInicio) { conditions.push('d.data_criacao >= ?'); paramsSql.push(new Date(dataInicio).toISOString().split('T')[0]); }
+    
     const dataFim = searchParams.get('dataFim');
-    
-    // Aplicar filtros
-    let documentosFiltrados = [...documentos];
-    
-    if (termo) {
-      documentosFiltrados = documentosFiltrados.filter(doc => 
-        doc.nome.toLowerCase().includes(termo)
-      );
+    if (dataFim) { conditions.push('d.data_criacao <= ?'); paramsSql.push(new Date(dataFim).toISOString().split('T')[0]); }
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
     }
+    sql += ' GROUP BY d.id ORDER BY d.data_criacao DESC';
     
-    if (tipo && tipo !== 'todos') {
-      documentosFiltrados = documentosFiltrados.filter(doc => doc.tipo === tipo);
+    console.log("Executando SQL GET Documentos (geral):", sql, paramsSql);
+    const [rows] = await connection.execute(sql, paramsSql);
+    
+    const documentos = (rows as any[]).map(formatarDocumentoMySQL);
+    return NextResponse.json(documentos);
+
+  } catch (error: any) {
+    console.error('Erro ao listar documentos (MySQL):', error);
+    if (error.message === 'jwt expired' || error.message.includes('invalid token')) {
+        return NextResponse.json({ error: 'Não autorizado: token inválido ou expirado' }, { status: 401 });
     }
-    
-    if (licitacaoId && licitacaoId !== 'todos') {
-      documentosFiltrados = documentosFiltrados.filter(doc => doc.licitacaoId === licitacaoId);
-    }
-    
-    if (dataInicio) {
-      const dataInicioObj = new Date(dataInicio);
-      documentosFiltrados = documentosFiltrados.filter(doc => {
-        const dataCriacao = new Date(doc.dataCriacao);
-        return dataCriacao >= dataInicioObj;
-      });
-    }
-    
-    if (dataFim) {
-      const dataFimObj = new Date(dataFim);
-      documentosFiltrados = documentosFiltrados.filter(doc => {
-        const dataCriacao = new Date(doc.dataCriacao);
-        return dataCriacao <= dataFimObj;
-      });
-    }
-    
-    return NextResponse.json(documentosFiltrados);
-  } catch (error) {
-    console.error('Erro ao listar documentos:', error);
     return NextResponse.json(
-      { error: 'Erro ao listar documentos' },
+      { error: 'Erro ao listar documentos', details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (connection) await connection.release();
   }
 }
 
-// POST - Criar novo documento
+// POST - Criar novo documento (metadata)
 export async function POST(request: NextRequest) {
+  let connection;
+  console.log("POST /api/documentos - Iniciando criação de metadados de documento com MySQL");
   try {
-    const documentos = await carregarDocumentos();
-    const data = await request.json();
-    
-    // Validação básica
-    if (!data.nome || !data.tipo) {
-      return NextResponse.json(
-        { error: 'Nome e tipo são campos obrigatórios' },
-        { status: 400 }
-      );
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await verifyJwtToken(token);
+    if (!decodedToken || !decodedToken.userId) {
+      return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
+    }
+    const userIdFromToken = decodedToken.userId;
+
+    const data = await request.json();
+    console.log("Dados recebidos para novo documento (metadata):", data);
     
-    // Gerar ID único
-    const id = `doc-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    if (!data.nome || !data.tipo) {
+      return NextResponse.json({ error: 'Nome e tipo são campos obrigatórios' }, { status: 400 });
+    }
+    // licitacaoId é opcional aqui, mas criadoPor deve vir do token
     
-    // Timestamp para auditoria
-    const agora = new Date().toISOString();
-    
-    // Criar novo documento
-    const novoDocumento: Documento = {
-      id,
+    connection = await getDbConnection();
+    await connection.beginTransaction();
+
+    const newDocumentId = uuidv4();
+    const placeholderUrl = `pending_storage_solution/general_docs/${newDocumentId}/${data.nome}`;
+    const placeholderPath = `general_docs/${newDocumentId}/${data.nome}`;
+    console.warn(`AVISO: Upload de arquivo real não implementado. Usando placeholders: URL=${placeholderUrl}, Path=${placeholderPath}`);
+
+    const documentoDb = {
+      id: newDocumentId,
       nome: data.nome,
+      licitacao_id: data.licitacaoId || null,
       tipo: data.tipo,
-      url: data.url || `/documentos/${id}/${data.nome}`,
-      dataCriacao: agora,
-      dataAtualizacao: agora,
-      licitacaoId: data.licitacaoId || "",
+      descricao: data.descricao || null,
+      numero_documento: data.numeroDocumento || null,
+      data_validade: data.dataValidade ? new Date(data.dataValidade).toISOString().split('T')[0] : null,
+      url_documento: placeholderUrl,
+      arquivo_path: placeholderPath,
+      formato: data.formato || null,
       tamanho: data.tamanho || 0,
-      arquivo: data.arquivo || data.nome,
+      status: data.status || 'ativo',
+      criado_por: userIdFromToken,
+      categoria: data.categoriaLegado || null,
     };
     
-    // Adicionar ao "banco de dados"
-    documentos.push(novoDocumento);
-    await salvarDocumentos(documentos);
+    const fields = Object.keys(documentoDb);
+    const placeholders = fields.map(() => '?').join(', ');
+    const values = Object.values(documentoDb);
+
+    const sqlInsert = `INSERT INTO documentos (${fields.join(', ')}, data_criacao, data_atualizacao) VALUES (${placeholders}, NOW(), NOW())`;
+    await connection.execute(sqlInsert, values);
+    console.log("Metadados do documento inseridos com ID:", newDocumentId);
+
+    if (data.tags && Array.isArray(data.tags) && data.tags.length > 0) {
+      for (const tagName of data.tags) {
+         if (typeof tagName !== 'string' || tagName.trim() === '') continue;
+        let [tagRows]: any = await connection.execute('SELECT id FROM tags WHERE nome = ?', [tagName.trim()]);
+        let tagId;
+        if (tagRows.length > 0) {
+          tagId = tagRows[0].id;
+        } else {
+          tagId = uuidv4();
+          await connection.execute('INSERT INTO tags (id, nome, created_at, updated_at) VALUES (?, ?, NOW(), NOW())', [tagId, tagName.trim()]);
+        }
+        await connection.execute('INSERT INTO documentos_tags (documento_id, tag_id) VALUES (?, ?)', [newDocumentId, tagId]);
+      }
+    }
+
+    await connection.commit();
+
+    // Fetch e formatar para resposta
+    const [createdDocRows]: any = await connection.execute(
+      `SELECT d.*, l.titulo as licitacao_titulo, u.name as criado_por_nome,
+              (SELECT GROUP_CONCAT(t.nome SEPARATOR ', ') FROM tags t JOIN documentos_tags dt ON t.id = dt.tag_id WHERE dt.documento_id = d.id) as tags_concatenadas
+       FROM documentos d
+       LEFT JOIN licitacoes l ON d.licitacao_id = l.id
+       LEFT JOIN users u ON d.criado_por = u.id
+       WHERE d.id = ? GROUP BY d.id`, [newDocumentId]
+    );
     
-    return NextResponse.json(novoDocumento, { status: 201 });
-  } catch (error) {
-    console.error('Erro ao criar documento:', error);
+    return NextResponse.json(formatarDocumentoMySQL(createdDocRows[0]), { status: 201 });
+
+  } catch (error: any) {
+    console.error('Erro ao criar documento (MySQL):', error);
+    if (connection) await connection.rollback().catch(rbError => console.error("Erro no rollback:", rbError));
+    if (error.message === 'jwt expired' || error.message.includes('invalid token')) {
+        return NextResponse.json({ error: 'Não autorizado: token inválido ou expirado' }, { status: 401 });
+    }
     return NextResponse.json(
       { error: 'Erro ao criar documento' },
       { status: 500 }

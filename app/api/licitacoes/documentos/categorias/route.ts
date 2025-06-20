@@ -1,112 +1,105 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { crmonefactory } from '@/lib/supabase/client';
+import { getDbConnection } from '@/lib/mysql/client';
+import { v4 as uuidv4 } from 'uuid';
 
-// GET - Listar categorias de documentos
+// GET - Listar "categorias" de documentos (agora tags)
 export async function GET(request: NextRequest) {
+  let connection;
+  console.log("GET /api/licitacoes/documentos/categorias - Iniciando consulta de tags com MySQL");
   try {
-    const { searchParams } = new URL(request.url);
+    connection = await getDbConnection();
     
-    // Parâmetros de filtro
-    const ativo = searchParams.get('ativo');
+    // A tabela `tags` não possui filtro de 'ativo'.
+    // Selecionamos os campos relevantes da tabela `tags`.
+    const sql = 'SELECT id, nome, created_at, updated_at FROM tags ORDER BY nome ASC';
+    console.log("Executando SQL:", sql);
+    const [rows] = await connection.execute(sql);
     
-    // Iniciar a consulta
-    let query = crmonefactory
-      .from('documento_categorias')
-      .select('*');
-    
-    // Aplicar filtros se existirem
-    if (ativo !== null) {
-      query = query.eq('ativo', ativo === 'true');
-    }
-    
-    // Ordenar por nome
-    query = query.order('nome', { ascending: true });
-    
-    // Executar a consulta
-    const { data, error } = await query;
-    
-    if (error) {
-      console.error('Erro ao consultar categorias de documentos:', error);
-      return NextResponse.json(
-        { error: 'Erro ao listar categorias: ' + error.message },
-        { status: 500 }
-      );
-    }
-    
-    // Formatar os dados
-    const categorias = data.map(categoria => ({
-      id: categoria.id,
-      nome: categoria.nome,
-      descricao: categoria.descricao,
-      ativo: categoria.ativo,
-      cor: categoria.cor,
-      icone: categoria.icone,
-      dataCriacao: categoria.data_criacao,
-      dataAtualizacao: categoria.data_atualizacao
+    const tags = (rows as any[]).map(tag => ({
+      id: tag.id,
+      nome: tag.nome,
+      // Os campos descricao, ativo, cor, icone não existem na tabela 'tags'
+      // Se o frontend espera esses campos, precisará ser ajustado ou eles podem ser retornados como null/default.
+      descricao: null,
+      ativo: true, // Assumindo que todas as tags listadas estão 'ativas' por padrão.
+      cor: null,
+      icone: null,
+      dataCriacao: tag.created_at, // Mapeando para manter consistência com a resposta anterior, se possível
+      dataAtualizacao: tag.updated_at, // Mapeando para manter consistência
     }));
     
-    return NextResponse.json(categorias);
-  } catch (error) {
-    console.error('Erro ao listar categorias de documentos:', error);
+    return NextResponse.json(tags);
+
+  } catch (error: any) {
+    console.error('Erro ao listar tags (MySQL):', error);
     return NextResponse.json(
-      { error: 'Erro interno ao processar categorias de documentos' },
+      { error: 'Erro ao listar tags', details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.release();
+        console.log("Conexão MySQL liberada (GET Tags).");
+      } catch (releaseError: any) {
+        console.error("Erro ao liberar conexão MySQL (GET Tags):", releaseError.message);
+      }
+    }
   }
 }
 
-// POST - Criar nova categoria de documento
+// POST - Criar nova "categoria" de documento (agora tag)
 export async function POST(request: NextRequest) {
+  let connection;
+  console.log("POST /api/licitacoes/documentos/categorias - Iniciando criação de tag com MySQL");
   try {
     const data = await request.json();
-    
-    // Validar dados básicos
-    if (!data.nome) {
-      return NextResponse.json(
-        { error: 'Nome da categoria é obrigatório' },
-        { status: 400 }
-      );
+    console.log("Dados recebidos para nova tag:", data);
+
+    if (!data.nome || String(data.nome).trim() === '') {
+      return NextResponse.json({ error: 'Nome da tag é obrigatório' }, { status: 400 });
     }
     
-    // Preparar o objeto para inserção
-    const categoria = {
-      nome: data.nome,
-      descricao: data.descricao,
-      ativo: data.ativo !== false, // Default true
-      cor: data.cor || '#007bff',
-      icone: data.icone
-    };
+    const newTagId = uuidv4();
+    const tagName = String(data.nome).trim();
+    // Outros campos como descricao, ativo, cor, icone são ignorados pois não existem na tabela `tags`.
     
-    // Inserir a categoria
-    const { data: categoriaInserida, error } = await crmonefactory
-      .from('documento_categorias')
-      .insert(categoria)
-      .select()
-      .single();
+    connection = await getDbConnection();
     
-    if (error) {
-      console.error('Erro ao criar categoria:', error);
-      return NextResponse.json(
-        { error: 'Erro ao criar categoria: ' + error.message },
-        { status: 500 }
-      );
+    try {
+      const sqlInsert = 'INSERT INTO tags (id, nome, created_at, updated_at) VALUES (?, ?, NOW(), NOW())';
+      await connection.execute(sqlInsert, [newTagId, tagName]);
+      console.log("Nova tag criada com ID:", newTagId);
+    } catch (dbError: any) {
+      if (dbError.code === 'ER_DUP_ENTRY') { // Código de erro do MySQL para entrada duplicada
+        console.warn("Tentativa de criar tag duplicada com nome:", tagName);
+        return NextResponse.json({ error: `A tag '${tagName}' já existe.` }, { status: 409 }); // Conflict
+      }
+      throw dbError; // Re-lançar outros erros de DB
+    }
+
+    // Para retornar o objeto completo incluindo timestamps gerados pelo DB:
+    const [createdRows]: any = await connection.execute('SELECT id, nome, created_at, updated_at FROM tags WHERE id = ?', [newTagId]);
+    if (createdRows.length === 0) {
+        return NextResponse.json({ error: "Falha ao recuperar tag recém-criada" }, { status: 500 });
     }
     
-    // Formatar para retorno
-    const categoriaFormatada = {
-      id: categoriaInserida.id,
-      nome: categoriaInserida.nome,
-      descricao: categoriaInserida.descricao,
-      ativo: categoriaInserida.ativo,
-      cor: categoriaInserida.cor,
-      icone: categoriaInserida.icone,
-      dataCriacao: categoriaInserida.data_criacao,
-      dataAtualizacao: categoriaInserida.data_atualizacao
+    const tagCriada = createdRows[0];
+    const tagFormatada = {
+      id: tagCriada.id,
+      nome: tagCriada.nome,
+      descricao: null, // Campo não existe na tabela tags
+      ativo: true,     // Assumindo ativa por default
+      cor: null,       // Campo não existe na tabela tags
+      icone: null,     // Campo não existe na tabela tags
+      dataCriacao: tagCriada.created_at,
+      dataAtualizacao: tagCriada.updated_at
     };
     
-    return NextResponse.json(categoriaFormatada, { status: 201 });
-  } catch (error) {
-    console.error('Erro ao criar categoria de documento:', error);
+    return NextResponse.json(tagFormatada, { status: 201 });
+
+  } catch (error: any) {
+    console.error('Erro ao criar tag (MySQL):', error);
     return NextResponse.json(
       { error: 'Erro interno ao criar categoria de documento' },
       { status: 500 }

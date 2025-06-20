@@ -1,208 +1,171 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { crmonefactory } from '@/lib/supabase/client';
+import { getDbConnection } from '@/lib/mysql/client';
+import { v4 as uuidv4 } from 'uuid';
+
+// Helper para converter string DD/MM/YYYY ou ISO para YYYY-MM-DD
+function parseToYYYYMMDD(dateString: string | undefined | null): string | null {
+  if (!dateString) return null;
+  const date = new Date(dateString);
+  if (!isNaN(date.getTime())) {
+    const localDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    return localDate.toISOString().split('T')[0];
+  }
+  const parts = dateString.split('/');
+  if (parts.length === 3) {
+    const [day, month, year] = parts;
+    if (day.length === 2 && month.length === 2 && year.length === 4) {
+        return `${year}-${month}-${day}`;
+    }
+  }
+  console.warn(`parseToYYYYMMDD: Formato de data inválido ou não reconhecido: ${dateString}`);
+  return null;
+}
 
 export async function GET(request: NextRequest) {
+  let connection;
+  const counts = {
+    orgaosInseridos: 0,
+    orgaosIgnorados: 0,
+    tagsInseridas: 0,
+    tagsIgnoradas: 0,
+    licitacoesInseridas: 0,
+    licitacoesIgnoradas: 0,
+    documentosInseridos: 0,
+    documentosIgnorados: 0,
+    documentosTagsLinkados: 0,
+    documentosTagsIgnorados: 0,
+  };
+
+  console.log("GET /api/licitacoes/seed-data - Iniciando seeding com MySQL");
+
   try {
-    // 1. Inserir órgãos
-    const orgaos = [
-      {
-        nome: 'Prefeitura Municipal de São Paulo',
-        cnpj: '12.345.678/0001-01',
-        cidade: 'São Paulo',
-        estado: 'SP',
-        email: 'contato@prefeiturasp.gov.br',
-        telefone: '(11) 3333-4444',
-        website: 'www.prefeitura.sp.gov.br',
-        endereco: 'Rua da Prefeitura, 123'
-      },
-      {
-        nome: 'Governo do Estado de São Paulo',
-        cnpj: '23.456.789/0001-02',
-        cidade: 'São Paulo',
-        estado: 'SP',
-        email: 'contato@sp.gov.br',
-        telefone: '(11) 4444-5555',
-        website: 'www.sp.gov.br',
-        endereco: 'Avenida do Estado, 456'
-      },
-      {
-        nome: 'Ministério da Educação',
-        cnpj: '34.567.890/0001-03',
-        cidade: 'Brasília',
-        estado: 'DF',
-        email: 'contato@mec.gov.br',
-        telefone: '(61) 5555-6666',
-        website: 'www.mec.gov.br',
-        endereco: 'Esplanada dos Ministérios, Bloco L'
-      }
+    connection = await getDbConnection();
+    // Não usaremos transações globais para permitir que `INSERT IGNORE` funcione por partes.
+
+    // 1. Seed `orgaos`
+    const orgaosSeedData = [
+      { nome: 'Prefeitura Municipal de São Paulo', cnpj: '12.345.678/0001-01', cidade: 'São Paulo', estado: 'SP', /* outros campos opcionais */ },
+      { nome: 'Governo do Estado de São Paulo', cnpj: '23.456.789/0001-02', cidade: 'São Paulo', estado: 'SP', },
+      { nome: 'Ministério da Educação', cnpj: '34.567.890/0001-03', cidade: 'Brasília', estado: 'DF', },
     ];
 
-    const { data: orgaosInseridos, error: orgaosError } = await crmonefactory
-      .from('orgaos')
-      .upsert(orgaos, { onConflict: 'cnpj' })
-      .select();
-
-    if (orgaosError) {
-      console.error('Erro ao inserir órgãos:', orgaosError);
-      return NextResponse.json(
-        { error: 'Erro ao inserir órgãos: ' + orgaosError.message },
-        { status: 500 }
-      );
+    for (const orgao of orgaosSeedData) {
+      const newId = uuidv4();
+      const sql = `INSERT IGNORE INTO orgaos (id, nome, cnpj, cidade, estado, tipo, endereco, email, telefone, website, segmento, origem_lead, responsavel_interno, descricao, observacoes, faturamento, ativo, data_criacao, data_atualizacao)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())`;
+      const params = [
+        newId, orgao.nome, orgao.cnpj, orgao.cidade, orgao.estado,
+        orgao.tipo || null, orgao.endereco || null, orgao.email || null, orgao.telefone || null, orgao.website || null,
+        orgao.segmento || null, orgao.origem_lead || null, orgao.responsavel_interno || null,
+        orgao.descricao || null, orgao.observacoes || null, orgao.faturamento || null
+      ];
+      const [result]: any = await connection.execute(sql, params);
+      if (result.affectedRows > 0) counts.orgaosInseridos++; else counts.orgaosIgnorados++;
     }
+    console.log(`Órgãos: ${counts.orgaosInseridos} inseridos, ${counts.orgaosIgnorados} ignorados.`);
 
-    // 2. Buscar IDs dos órgãos inseridos
-    const { data: todosOrgaos } = await crmonefactory
-      .from('orgaos')
-      .select('id, nome');
+    // 2. Fetch `orgaos` for mapping
+    const [fetchedOrgaos]: any = await connection.execute('SELECT id, nome, cnpj FROM orgaos');
+    const orgaosNomeMap = new Map(fetchedOrgaos.map((o: any) => [o.nome, o.id]));
+    // const orgaosCnpjMap = new Map(fetchedOrgaos.map((o: any) => [o.cnpj, o.id])); // Se CNPJ for usado como chave no seed
 
-    if (!todosOrgaos || todosOrgaos.length === 0) {
-      return NextResponse.json(
-        { error: 'Não foi possível recuperar os órgãos após a inserção' },
-        { status: 500 }
-      );
+    // 3. Seed `tags` (from `documento_categorias` concept)
+    const tagsSeedData = ["Edital", "Proposta", "Habilitação", "Contrato", "Aditivo", "Planilha Orçamentária"];
+    for (const tagName of tagsSeedData) {
+      const newId = uuidv4();
+      const sql = 'INSERT IGNORE INTO tags (id, nome, created_at, updated_at) VALUES (?, ?, NOW(), NOW())';
+      const [result]: any = await connection.execute(sql, [newId, tagName]);
+      if (result.affectedRows > 0) counts.tagsInseridas++; else counts.tagsIgnoradas++;
     }
+    console.log(`Tags: ${counts.tagsInseridas} inseridas, ${counts.tagsIgnoradas} ignoradas.`);
 
-    const orgaosMap = new Map();
-    todosOrgaos.forEach(orgao => {
-      orgaosMap.set(orgao.nome, orgao.id);
-    });
+    // 4. Fetch `tags` for mapping
+    const [fetchedTags]: any = await connection.execute('SELECT id, nome FROM tags');
+    const tagsMap = new Map(fetchedTags.map((t: any) => [t.nome, t.id]));
 
-    // 3. Inserir licitações
-    const licitacoes = [
-      {
-        titulo: 'Aquisição de Computadores',
-        orgao_id: orgaosMap.get('Prefeitura Municipal de São Paulo'),
-        status: 'analise_interna',
-        data_abertura: '2025-05-01',
-        data_publicacao: '2025-04-01',
-        valor_estimado: 500000.00,
-        modalidade: 'Pregão Eletrônico',
-        objeto: 'Aquisição de 100 computadores para as escolas municipais',
-        numero_edital: '001/2025'
-      },
-      {
-        titulo: 'Serviços de Manutenção Predial',
-        orgao_id: orgaosMap.get('Governo do Estado de São Paulo'),
-        status: 'aguardando_pregao',
-        data_abertura: '2025-06-15',
-        data_publicacao: '2025-05-15',
-        valor_estimado: 1200000.00,
-        modalidade: 'Concorrência',
-        objeto: 'Contratação de empresa especializada em manutenção predial para os prédios administrativos',
-        numero_edital: 'CONC-002/2025'
-      },
-      {
-        titulo: 'Fornecimento de Merenda Escolar',
-        orgao_id: orgaosMap.get('Ministério da Educação'),
-        status: 'envio_documentos',
-        data_abertura: '2025-05-20',
-        data_publicacao: '2025-04-20',
-        valor_estimado: 3000000.00,
-        modalidade: 'Pregão Eletrônico',
-        objeto: 'Fornecimento de merenda escolar para as escolas federais do estado',
-        numero_edital: 'PE-003/2025'
-      }
+    // 5. Seed `licitacoes`
+    const licitacoesSeedData = [
+      { titulo: 'Aquisição de Computadores', orgaoNome: 'Prefeitura Municipal de São Paulo', status: 'analise_interna', data_abertura: '2025-05-01', valor_estimado: 500000.00, modalidade: 'Pregão Eletrônico', objeto: 'Aquisição de 100 computadores...', numero_edital: '001/2025' },
+      { titulo: 'Serviços de Manutenção Predial', orgaoNome: 'Governo do Estado de São Paulo', status: 'aguardando_pregao', data_abertura: '2025-06-15', valor_estimado: 1200000.00, modalidade: 'Concorrência', objeto: 'Contratação de empresa especializada...', numero_edital: 'CONC-002/2025' },
+      { titulo: 'Fornecimento de Merenda Escolar', orgaoNome: 'Ministério da Educação', status: 'envio_documentos', data_abertura: '2025-05-20', valor_estimado: 3000000.00, modalidade: 'Pregão Eletrônico', objeto: 'Fornecimento de merenda escolar...', numero_edital: 'PE-003/2025' },
     ];
 
-    // Verificar se todos os IDs de órgãos foram encontrados
-    const todosPresentesComId = licitacoes.every(licitacao => !!licitacao.orgao_id);
-    if (!todosPresentesComId) {
-      return NextResponse.json(
-        { error: 'Alguns órgãos não foram encontrados no banco de dados' },
-        { status: 500 }
-      );
-    }
-
-    const { data: licitacoesInseridas, error: licitacoesError } = await crmonefactory
-      .from('licitacoes')
-      .upsert(licitacoes, { onConflict: 'titulo' })
-      .select();
-
-    if (licitacoesError) {
-      console.error('Erro ao inserir licitações:', licitacoesError);
-      return NextResponse.json(
-        { error: 'Erro ao inserir licitações: ' + licitacoesError.message },
-        { status: 500 }
-      );
-    }
-
-    // 4. Buscar IDs das licitações e categorias de documentos
-    const { data: todasLicitacoes } = await crmonefactory
-      .from('licitacoes')
-      .select('id, titulo');
-
-    const { data: todasCategorias } = await crmonefactory
-      .from('documento_categorias')
-      .select('id, nome');
-
-    const licitacoesMap = new Map();
-    todasLicitacoes.forEach(licitacao => {
-      licitacoesMap.set(licitacao.titulo, licitacao.id);
-    });
-
-    const categoriasMap = new Map();
-    todasCategorias.forEach(categoria => {
-      categoriasMap.set(categoria.nome, categoria.id);
-    });
-
-    // 5. Inserir documentos
-    const documentos = [
-      {
-        nome: 'Edital de Licitação - Computadores.pdf',
-        licitacao_id: licitacoesMap.get('Aquisição de Computadores'),
-        categoria_id: categoriasMap.get('Edital'),
-        tipo: 'pdf',
-        status: 'ativo'
-      },
-      {
-        nome: 'Proposta Comercial - Manutenção.pdf',
-        licitacao_id: licitacoesMap.get('Serviços de Manutenção Predial'),
-        categoria_id: categoriasMap.get('Proposta'),
-        tipo: 'pdf',
-        status: 'ativo'
-      },
-      {
-        nome: 'Documentos de Habilitação - Merenda.zip',
-        licitacao_id: licitacoesMap.get('Fornecimento de Merenda Escolar'),
-        categoria_id: categoriasMap.get('Habilitação'),
-        tipo: 'zip',
-        status: 'ativo'
+    for (const lic of licitacoesSeedData) {
+      const newId = uuidv4();
+      const orgaoId = orgaosNomeMap.get(lic.orgaoNome);
+      if (!orgaoId) {
+        console.warn(`Órgão "${lic.orgaoNome}" não encontrado para a licitação "${lic.titulo}". Pulando.`);
+        counts.licitacoesIgnoradas++;
+        continue;
       }
+      const sql = `INSERT IGNORE INTO licitacoes (id, titulo, orgao_id, status, data_abertura, data_publicacao, valor_estimado, modalidade, objeto, numero_edital, data_criacao, data_atualizacao)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
+      const params = [
+        newId, lic.titulo, orgaoId, lic.status, parseToYYYYMMDD(lic.data_abertura), parseToYYYYMMDD(lic.data_publicacao),
+        lic.valor_estimado, lic.modalidade, lic.objeto, lic.numero_edital
+      ];
+      const [result]: any = await connection.execute(sql, params);
+      if (result.affectedRows > 0) counts.licitacoesInseridas++; else counts.licitacoesIgnoradas++;
+    }
+    console.log(`Licitações: ${counts.licitacoesInseridas} inseridas, ${counts.licitacoesIgnoradas} ignoradas.`);
+
+    // 6. Fetch `licitacoes` for mapping
+    const [fetchedLicitacoes]: any = await connection.execute('SELECT id, titulo FROM licitacoes');
+    const licitacoesMap = new Map(fetchedLicitacoes.map((l: any) => [l.titulo, l.id]));
+
+    // 7. Seed `documentos` and `documentos_tags`
+    // Supondo que um user_id 'seed_user_id' existe ou é NULLable para `criado_por`
+    const defaultUserIdForSeed = null; // ou um UUID válido de um usuário existente
+    console.warn("AVISO: Documentos serão criados com URL/Path de placeholder e criado_por como null ou 'seed_user_id'.");
+
+    const documentosSeedData = [
+      { nome: 'Edital de Licitação - Computadores.pdf', licitacaoTitulo: 'Aquisição de Computadores', tagNome: 'Edital', tipo: 'pdf', status: 'ativo' },
+      { nome: 'Proposta Comercial - Manutenção.pdf', licitacaoTitulo: 'Serviços de Manutenção Predial', tagNome: 'Proposta', tipo: 'pdf', status: 'ativo' },
+      { nome: 'Documentos de Habilitação - Merenda.zip', licitacaoTitulo: 'Fornecimento de Merenda Escolar', tagNome: 'Habilitação', tipo: 'zip', status: 'ativo' },
     ];
 
-    // Verificar se todos os IDs foram encontrados
-    const todosDocumentosComIds = documentos.every(doc => !!doc.licitacao_id && !!doc.categoria_id);
-    if (!todosDocumentosComIds) {
-      return NextResponse.json(
-        { error: 'Algumas licitações ou categorias não foram encontradas no banco de dados' },
-        { status: 500 }
-      );
+    for (const doc of documentosSeedData) {
+      const newId = uuidv4();
+      const licitacaoId = licitacoesMap.get(doc.licitacaoTitulo);
+      const tagId = tagsMap.get(doc.tagNome);
+
+      if (!licitacaoId) {
+        console.warn(`Licitação "${doc.licitacaoTitulo}" não encontrada para o documento "${doc.nome}". Pulando.`);
+        counts.documentosIgnorados++;
+        continue;
+      }
+
+      const urlPlaceholder = `pending_storage_solution/seed/${newId}/${doc.nome}`;
+      const pathPlaceholder = `seed/${newId}/${doc.nome}`;
+
+      const sqlDoc = `INSERT IGNORE INTO documentos (id, nome, licitacao_id, tipo, status, url_documento, arquivo_path, criado_por, data_criacao, data_atualizacao)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
+      const paramsDoc = [newId, doc.nome, licitacaoId, doc.tipo, doc.status, urlPlaceholder, pathPlaceholder, defaultUserIdForSeed];
+      const [resultDoc]: any = await connection.execute(sqlDoc, paramsDoc);
+
+      if (resultDoc.affectedRows > 0) {
+        counts.documentosInseridos++;
+        if (tagId) {
+          const sqlDocTag = 'INSERT IGNORE INTO documentos_tags (documento_id, tag_id) VALUES (?, ?)';
+          const [resultDocTag]: any = await connection.execute(sqlDocTag, [newId, tagId]);
+          if (resultDocTag.affectedRows > 0) counts.documentosTagsLinkados++; else counts.documentosTagsIgnorados++;
+        } else {
+          console.warn(`Tag "${doc.tagNome}" não encontrada para o documento "${doc.nome}".`);
+        }
+      } else {
+        counts.documentosIgnorados++;
+      }
     }
+    console.log(`Documentos: ${counts.documentosInseridos} inseridos, ${counts.documentosIgnorados} ignorados.`);
+    console.log(`Documentos_Tags: ${counts.documentosTagsLinkados} linkados, ${counts.documentosTagsIgnorados} ignorados.`);
 
-    const { data: documentosInseridos, error: documentosError } = await crmonefactory
-      .from('documentos')
-      .upsert(documentos, { onConflict: 'nome' })
-      .select();
-
-    if (documentosError) {
-      console.error('Erro ao inserir documentos:', documentosError);
-      return NextResponse.json(
-        { error: 'Erro ao inserir documentos: ' + documentosError.message },
-        { status: 500 }
-      );
-    }
-
-    // Retornar o resumo dos dados inseridos
     return NextResponse.json({
-      mensagem: 'Dados de teste inseridos com sucesso',
-      dados: {
-        orgaos: orgaosInseridos?.length || 0,
-        licitacoes: licitacoesInseridas?.length || 0,
-        documentos: documentosInseridos?.length || 0
-      }
+      mensagem: 'Dados de teste processados com MySQL e INSERT IGNORE.',
+      dados: counts
     });
-  } catch (error) {
-    console.error('Erro ao inserir dados de teste:', error);
+
+  } catch (error: any) {
+    console.error('Erro ao inserir dados de teste (MySQL):', error);
     return NextResponse.json(
       { error: 'Erro interno ao inserir dados de teste' },
       { status: 500 }
