@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Teste Direto Supabase</title>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; background-color: #f9f9f9; }
+    button { background-color: #4CAF50; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
+    pre { background-color: #f1f1f1; padding: 10px; border-radius: 4px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>Teste Direto da Conexão com Supabase</h1>
+  <p>Este teste conecta diretamente ao Supabase sem passar pelos endpoints do Next.js</p>
+  
+  <div class="card">
+    <h2>1. Verificar Conexão</h2>
+    <button onclick="testConnection()">Testar Conexão</button>
+    <div>Resultado: <pre id="connectionResult">Clique no botão para testar</pre></div>
+  </div>
+  
+  <div class="card">
+    <h2>2. Listar Schemas</h2>
+    <button onclick="listSchemas()">Listar Schemas</button>
+    <div>Resultado: <pre id="schemasResult">Clique no botão para testar</pre></div>
+  </div>
+  
+  <div class="card">
+    <h2>3. Verificar Estrutura da Tabela Users</h2>
+    <button onclick="checkTableStructure()">Verificar Estrutura</button>
+    <div>Resultado: <pre id="structureResult">Clique no botão para testar</pre></div>
+  </div>
+  
+  <div class="card">
+    <h2>4. Inserir Usuário Teste</h2>
+    <button onclick="createTestUser()">Criar Usuário Teste</button>
+    <div>Resultado: <pre id="createResult">Clique no botão para testar</pre></div>
+  </div>
+  
+  <script>
+    // Credenciais do Supabase
+    const supabaseUrl = 'https://supabase.guigasautomacao.uk';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ewogICJyb2xlIjogImFub24iLAogICJpc3MiOiAic3VwYWJhc2UiLAogICJpYXQiOiAxNzE1MDUwODAwLAogICJleHAiOiAxODcyODE3MjAwCn0.aSkpG5e1oxLQU5tHQS_oBAie8gbMhUEwMzr8ziECxpc';
+    
+    // Inicializar cliente Supabase
+    const supabase = supabase.createClient(supabaseUrl, supabaseKey);
+    
+    async function testConnection() {
+      const resultEl = document.getElementById('connectionResult');
+      try {
+        // Verificar se conseguimos fazer uma query simples
+        const { data, error } = await supabase
+          .from('crmonefactory.users')
+          .select('count(*)', { count: 'exact' })
+          .limit(1);
+        
+        if (error) {
+          console.error('Erro de conexão:', error);
+          resultEl.textContent = JSON.stringify(error, null, 2);
+          return;
+        }
+        
+        resultEl.textContent = 'Conexão bem-sucedida!\n' + JSON.stringify(data, null, 2);
+      } catch (error) {
+        console.error('Erro ao conectar:', error);
+        resultEl.textContent = 'Erro: ' + error.message;
+      }
+    }
+    
+    async function listSchemas() {
+      const resultEl = document.getElementById('schemasResult');
+      try {
+        // Listar schemas disponíveis
+        const { data, error } = await supabase
+          .rpc('list_schemas');
+        
+        if (error) {
+          // Tentar uma abordagem alternativa
+          const { data: schemasData, error: schemasError } = await supabase
+            .from('information_schema.schemata')
+            .select('schema_name')
+            .neq('schema_name', 'pg_catalog')
+            .neq('schema_name', 'information_schema');
+          
+          if (schemasError) {
+            console.error('Erro ao listar schemas:', schemasError);
+            resultEl.textContent = JSON.stringify(schemasError, null, 2);
+            return;
+          }
+          
+          resultEl.textContent = JSON.stringify(schemasData, null, 2);
+          return;
+        }
+        
+        resultEl.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        console.error('Erro ao listar schemas:', error);
+        resultEl.textContent = 'Erro: ' + error.message;
+      }
+    }
+    
+    async function checkTableStructure() {
+      const resultEl = document.getElementById('structureResult');
+      try {
+        // Tentar visualizar a estrutura da tabela
+        const { data, error } = await supabase
+          .rpc('get_table_structure', { 
+            table_schema: 'crmonefactory', 
+            table_name: 'users'
+          });
+        
+        if (error) {
+          // Tentar uma abordagem alternativa
+          const { data: columnsData, error: columnsError } = await supabase
+            .from('information_schema.columns')
+            .select('column_name, data_type, is_nullable, column_default')
+            .eq('table_schema', 'crmonefactory')
+            .eq('table_name', 'users');
+          
+          if (columnsError) {
+            console.error('Erro ao verificar estrutura:', columnsError);
+            resultEl.textContent = JSON.stringify(columnsError, null, 2);
+            return;
+          }
+          
+          resultEl.textContent = JSON.stringify(columnsData, null, 2);
+          return;
+        }
+        
+        resultEl.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        console.error('Erro ao verificar estrutura:', error);
+        resultEl.textContent = 'Erro: ' + error.message;
+      }
+    }
+    
+    async function createTestUser() {
+      const resultEl = document.getElementById('createResult');
+      try {
+        // Criar um usuário de teste com valores diretos sem hash (apenas para teste)
+        const testUser = {
+          name: 'Usuário Teste',
+          email: `teste${Date.now()}@exemplo.com`,
+          password: 'senha_teste_123', // Normalmente seria hasheada
+          role: 'user',
+          created_at: new Date().toISOString()
+        };
+        
+        console.log('Inserindo usuário teste:', testUser);
+        
+        // Testar inserção direta no Supabase
+        const { data, error } = await supabase
+          .from('crmonefactory.users')
+          .insert(testUser)
+          .select();
+        
+        if (error) {
+          console.error('Erro ao criar usuário:', error);
+          resultEl.textContent = JSON.stringify({
+            message: error.message,
+            hint: error.hint,
+            details: error.details,
+            code: error.code
+          }, null, 2);
+          return;
+        }
+        
+        resultEl.textContent = 'Usuário criado com sucesso!\n' + JSON.stringify(data, null, 2);
+      } catch (error) {
+        console.error('Erro ao criar usuário:', error);
+        resultEl.textContent = 'Erro: ' + error.message;
+      }
+    }
+  </script>
+</body>
+</html>

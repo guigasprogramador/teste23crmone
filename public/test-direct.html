@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Teste Direto Supabase</title>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    button { background-color: #4CAF50; color: white; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+    pre { background-color: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; max-height: 200px; overflow-y: auto; }
+    input { padding: 8px; margin-bottom: 10px; width: 100%; }
+  </style>
+</head>
+<body>
+  <h1>Teste Direto Supabase</h1>
+  <p>Esta página conecta diretamente ao Supabase para diagnosticar problemas.</p>
+
+  <div class="card">
+    <h2>1. Listar Tabelas Públicas</h2>
+    <button onclick="listTables()">Listar Tabelas</button>
+    <div>Resultado: <pre id="tablesResult">Clique no botão para testar</pre></div>
+  </div>
+
+  <div class="card">
+    <h2>2. Teste Simples de Inserção</h2>
+    <input type="text" id="testName" placeholder="Nome" value="Teste">
+    <input type="email" id="testEmail" placeholder="Email" value="teste@example.com">
+    <button onclick="testInsert()">Inserir Teste</button>
+    <div>Resultado: <pre id="insertResult">Preencha os campos e clique para testar</pre></div>
+  </div>
+
+  <script>
+    // Credenciais do Supabase
+    const supabaseUrl = 'https://supabase.guigasautomacao.uk';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ewogICJyb2xlIjogImFub24iLAogICJpc3MiOiAic3VwYWJhc2UiLAogICJpYXQiOiAxNzE1MDUwODAwLAogICJleHAiOiAxODcyODE3MjAwCn0.aSkpG5e1oxLQU5tHQS_oBAie8gbMhUEwMzr8ziECxpc';
+    
+    // Inicializar cliente
+    const { createClient } = supabase;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // Listar tabelas 
+    async function listTables() {
+      const resultEl = document.getElementById('tablesResult');
+      resultEl.textContent = 'Consultando...';
+      
+      try {
+        // Tentar listar tabelas no schema public
+        const { data, error } = await supabase
+          .from('information_schema.tables')
+          .select('table_schema, table_name')
+          .eq('table_schema', 'public')
+          .order('table_name');
+        
+        if (error) {
+          resultEl.textContent = `Erro: ${error.message}`;
+          return;
+        }
+        
+        resultEl.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        resultEl.textContent = `Erro: ${error.message}`;
+      }
+    }
+
+    // Teste de inserção simples
+    async function testInsert() {
+      const resultEl = document.getElementById('insertResult');
+      resultEl.textContent = 'Executando...';
+      
+      const name = document.getElementById('testName').value;
+      const email = document.getElementById('testEmail').value + Date.now(); // Evitar duplicatas
+      
+      try {
+        // Teste de inserção em uma tabela de teste
+        const { data, error } = await supabase
+          .from('users')
+          .insert({
+            name: name,
+            email: email,
+            password: 'teste123',
+            role: 'user',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .select();
+        
+        if (error) {
+          resultEl.textContent = `Erro: ${JSON.stringify({
+            message: error.message,
+            code: error.code,
+            details: error.details,
+            hint: error.hint
+          }, null, 2)}`;
+          return;
+        }
+        
+        resultEl.textContent = `Sucesso: ${JSON.stringify(data, null, 2)}`;
+      } catch (error) {
+        resultEl.textContent = `Erro: ${error.message}`;
+      }
+    }
+  </script>
+</body>
+</html>
