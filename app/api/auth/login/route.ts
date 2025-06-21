@@ -29,7 +29,8 @@ async function gerarRespostaComMySQL(user: any, accessToken: string, refreshToke
           email: user.email,
           role: user.role || 'user',
           avatar_url: user.avatar_url
-        }
+        },
+        accessToken: accessToken // Add accessToken to the response body
       },
       { status: 200 }
     );
@@ -73,7 +74,8 @@ async function gerarRespostaComMySQL(user: any, accessToken: string, refreshToke
           email: user.email,
           role: user.role || 'user',
           avatar_url: user.avatar_url
-        }
+        },
+        accessToken: accessToken // Also add to fallback response for consistency
       },
       { status: 200 }
     );

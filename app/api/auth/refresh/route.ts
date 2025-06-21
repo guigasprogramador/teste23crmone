@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDbConnection } from '@/lib/mysql/client';
 import { generateAccessToken, verifyRefreshToken } from "@/lib/auth/jwt";
 
-export async function GET(request: NextRequest) {
+export async function POST(request: NextRequest) { // Changed GET to POST
   let connection;
   try {
     console.log("Iniciando processo de refresh de token com MySQL");
@@ -91,7 +91,8 @@ export async function GET(request: NextRequest) {
           email: user.email,
           role: user.role,
           avatar_url: user.avatar_url
-        }
+        },
+        accessToken: accessToken // Add accessToken to the response body
       },
       { status: 200 }
     );
