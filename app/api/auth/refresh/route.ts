@@ -91,8 +91,8 @@ export async function POST(request: NextRequest) { // Changed GET to POST
           email: user.email,
           role: user.role,
           avatar_url: user.avatar_url
-        },
-        accessToken: accessToken // Add accessToken to the response body
+        }
+        // accessToken: accessToken // REMOVED from response body
       },
       { status: 200 }
     );

@@ -53,17 +53,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        // 1. Tenta restaurar do localStorage
-        const accessToken = localStorage.getItem('accessToken');
+        // 1. Tenta restaurar user info do localStorage (otimismo)
         const userJson = localStorage.getItem('user');
-        if (accessToken && userJson) {
+        if (userJson) {
           setUser(JSON.parse(userJson));
-          setIsAuthenticated(true);
-          setLoading(false);
-          return;
+          // setIsAuthenticated(true); // Authentication will be confirmed by refreshToken or subsequent actions
         }
 
-        // 2. Se não houver no localStorage, tenta via refreshToken/cookie
+        // 2. Tenta via refreshToken/cookie para confirmar/estabelecer sessão
         const cookies = document.cookie.split(';');
         const refreshTokenCookie = cookies.find(cookie => cookie.trim().startsWith('refreshToken='));
         if (!refreshTokenCookie) {
@@ -105,7 +102,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 
       setUser(data.user);
       setIsAuthenticated(true);
-      localStorage.setItem('accessToken', data.accessToken); // Store the new accessToken
+      // localStorage.setItem('accessToken', data.accessToken); // REMOVED
     } catch (error) {
       console.error("Erro ao renovar token:", error);
       setUser(null);
@@ -169,8 +166,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 
       setUser(data.user);
       setIsAuthenticated(true);
-      localStorage.setItem('accessToken', data.accessToken);
-      localStorage.setItem('user', JSON.stringify(data.user));
+      // localStorage.setItem('accessToken', data.accessToken); // REMOVED
+      localStorage.setItem('user', JSON.stringify(data.user)); // User info can still be stored
       
       toast.success("Login realizado com sucesso!");
       router.push("/dashboard");

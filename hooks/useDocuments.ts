@@ -53,22 +53,12 @@ export function useDocuments() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Função para obter o token de autenticação
-  const getAuthToken = () => {
-    return localStorage.getItem('accessToken');
-  };
-
   // Buscar todos os documentos ou filtrar
   const fetchDocuments = useCallback(async (filters?: DocumentFilter) => {
     setLoading(true);
     setError(null);
 
     try {
-      const token = getAuthToken();
-      if (!token) {
-        throw new Error('Não autenticado');
-      }
-
       // Construir URL com parâmetros de filtro
       let url = '/api/documentos/doc';
       const params = new URLSearchParams();
@@ -87,8 +77,9 @@ export function useDocuments() {
 
       const response = await fetch(url, {
         method: 'GET',
+        credentials: 'include', // Add credentials: 'include'
         headers: {
-          'Authorization': `Bearer ${token}`,
+          // 'Authorization': `Bearer ${token}`, // Remove Authorization header
           'Content-Type': 'application/json'
         }
       });
@@ -116,15 +107,11 @@ export function useDocuments() {
     setError(null);
 
     try {
-      const token = getAuthToken();
-      if (!token) {
-        throw new Error('Não autenticado');
-      }
-
       const response = await fetch(`/api/documentos/doc/${id}`, {
         method: 'GET',
+        credentials: 'include', // Add credentials: 'include'
         headers: {
-          'Authorization': `Bearer ${token}`,
+          // 'Authorization': `Bearer ${token}`, // Remove Authorization header
           'Content-Type': 'application/json'
         }
       });
@@ -150,13 +137,8 @@ export function useDocuments() {
     setLoading(true);
     setError(null);
     try {
-      const token = getAuthToken();
-      if (!token) {
-        throw new Error('Não autenticado');
-      }
-      
       // API /api/documentos/doc (POST) agora espera 'tags' como array de strings
-      // e outros campos relevantes como 'criadoPor' (userId)
+      // e outros campos relevantes como 'criadoPor' (userId) - backend will get from JWT
       const payload = {
         nome: documentData.nome,
         tipo: documentData.tipo,
@@ -165,15 +147,16 @@ export function useDocuments() {
         numeroDocumento: documentData.numeroDocumento,
         dataValidade: documentData.dataValidade, // API espera YYYY-MM-DD ou null
         tags: documentData.tags || [],
-        criadoPor: getAuthToken() ? JSON.parse(atob(getAuthToken()!.split('.')[1])).userId : null, // Exemplo, idealmente de um contexto de usuário
+        // criadoPor: getAuthToken() ? JSON.parse(atob(getAuthToken()!.split('.')[1])).userId : null, // REMOVED - Backend will handle
         status: documentData.status || 'ativo',
         categoriaLegado: documentData.categoriaLegado
       };
       
       const response = await fetch('/api/documentos/doc', {
         method: 'POST',
+        credentials: 'include', // Add credentials: 'include'
         headers: {
-          'Authorization': `Bearer ${token}`,
+          // 'Authorization': `Bearer ${token}`, // Remove Authorization header
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
@@ -207,11 +190,6 @@ export function useDocuments() {
     setError(null);
 
     try {
-      const token = getAuthToken();
-      if (!token) {
-        throw new Error('Não autenticado');
-      }
-
       // Se não tiver arquivo, usar a função createDocument
       if (!documentData.arquivo) {
         const { arquivo, ...metadataOnly } = documentData;
@@ -235,23 +213,24 @@ export function useDocuments() {
       if (documentData.dataValidade) formData.append('dataValidade', documentData.dataValidade); // API espera YYYY-MM-DD
       // urlDocumento é placeholder, não precisa enviar
 
-      // Adicionar criadoPor (uploadPor na API de upload)
-      const decodedToken = getAuthToken() ? JSON.parse(atob(getAuthToken()!.split('.')[1])) : null;
-      if (decodedToken && decodedToken.userId) {
-        formData.append('uploadPor', decodedToken.userId);
-      } else {
-        console.warn("ID do usuário não encontrado para 'uploadPor'");
-        // Considerar lançar erro ou não enviar se for obrigatório
-      }
+      // Adicionar criadoPor (uploadPor na API de upload) - backend will handle
+      // const decodedToken = getAuthToken() ? JSON.parse(atob(getAuthToken()!.split('.')[1])) : null;
+      // if (decodedToken && decodedToken.userId) {
+      //   formData.append('uploadPor', decodedToken.userId);
+      // } else {
+      //   console.warn("ID do usuário não encontrado para 'uploadPor'");
+      //   // Considerar lançar erro ou não enviar se for obrigatório
+      // }
       if (documentData.status) formData.append('status', documentData.status);
       if (documentData.categoriaLegado) formData.append('categoria', documentData.categoriaLegado);
 
 
       const response = await fetch('/api/documentos/doc/upload', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
+        credentials: 'include', // Add credentials: 'include'
+        // headers: { // Remove Authorization header - FormData sets Content-Type
+        //   'Authorization': `Bearer ${token}`
+        // },
         body: formData
       });
 
@@ -283,18 +262,14 @@ export function useDocuments() {
     setError(null);
 
     try {
-      const token = getAuthToken();
-      if (!token) {
-        throw new Error('Não autenticado');
-      }
-
       // A API DELETE em /api/documentos/doc/[id] agora lida com o parâmetro 'fisicamente'
       const url = `/api/documentos/doc/${id}?fisicamente=${fisicamente}`;
 
       const response = await fetch(url, {
         method: 'DELETE',
+        credentials: 'include', // Add credentials: 'include'
         headers: {
-          'Authorization': `Bearer ${token}`,
+          // 'Authorization': `Bearer ${token}`, // Remove Authorization header
           // Content-Type não é usualmente necessário para DELETE se não houver corpo
         }
       });
@@ -330,11 +305,6 @@ export function useDocuments() {
     setError(null);
 
     try {
-      const token = getAuthToken();
-      if (!token) {
-        throw new Error('Não autenticado');
-      }
-
       // Se houver arquivo, fazer upload e atualizar o documento
       if (updateData.arquivo) {
         // Buscar documento atual para obter outros dados
@@ -389,8 +359,9 @@ export function useDocuments() {
 
         const response = await fetch(apiUrl, {
           method: 'PATCH',
+          credentials: 'include', // Add credentials: 'include'
           headers: {
-            'Authorization': `Bearer ${token}`,
+            // 'Authorization': `Bearer ${token}`, // Remove Authorization header
             'Content-Type': 'application/json'
           },
           // Se usar PATCH em /api/documentos/doc, o ID deve estar no corpo.
