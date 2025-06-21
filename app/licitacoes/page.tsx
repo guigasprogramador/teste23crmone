@@ -24,23 +24,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "@/components/ui/use-toast"
 import { v4 as uuidv4 } from 'uuid';
-import { createClient } from '@supabase/supabase-js'
 import { format } from 'date-fns';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true
-    },
-    db: {
-      schema: 'crmonefactory'
-    }
-  }
-)
 
 interface Licitacao {
   id: string;

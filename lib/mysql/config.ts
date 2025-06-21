@@ -1,10 +1,10 @@
 // lib/mysql/config.ts
 export const mysqlConfig = {
-  host: process.env.MYSQL_HOST || 'localhost',
-  user: process.env.MYSQL_USER || 'root',
-  password: process.env.MYSQL_PASSWORD || '',
-  database: process.env.MYSQL_DATABASE || 'your_database_name',
-  port: process.env.MYSQL_PORT ? parseInt(process.env.MYSQL_PORT, 10) : 3306,
+  host: '127.0.0.1',
+  user: 'root',
+  password: '123456789',
+  database: 'crmone-teste',
+  port: 3306,
 };
 
 // Example for creating a connection string if needed by some libraries

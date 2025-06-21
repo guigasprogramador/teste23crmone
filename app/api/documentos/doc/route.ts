@@ -144,9 +144,8 @@ export async function POST(request: NextRequest) {
     await connection.beginTransaction();
 
     const newDocumentId = uuidv4();
-    const placeholderUrl = `pending_storage_solution/file_url/${newDocumentId}/${body.nome}`;
-    const placeholderPath = `pending_storage_solution/file_path/${newDocumentId}/${body.nome}`;
-    console.warn(`AVISO: Upload de arquivo real não implementado. Usando placeholders: URL=${placeholderUrl}, Path=${placeholderPath}`);
+    // url_documento and arquivo_path are null for metadata-only entries
+    // The actual file upload is handled by the /api/documentos/doc/upload route
 
     const documentoDb = {
       id: newDocumentId,
@@ -154,10 +153,10 @@ export async function POST(request: NextRequest) {
       tipo: body.tipo,
       licitacao_id: body.licitacaoId || null,
       criado_por: userIdFromToken,
-      url_documento: placeholderUrl,
-      arquivo_path: placeholderPath,
+      url_documento: null, // Metadata-only, no direct file URL
+      arquivo_path: null, // Metadata-only, no file path
       formato: body.formato || null,
-      tamanho: body.tamanho || 0,
+      tamanho: body.tamanho || 0, // Should be 0 or null if no file
       status: body.status || 'ativo',
       descricao: body.descricao || null,
       numero_documento: body.numeroDocumento || null,
@@ -173,6 +172,7 @@ export async function POST(request: NextRequest) {
     await connection.execute(sqlInsert, values);
     console.log("Documento (metadados) inserido com ID:", newDocumentId);
 
+    // Tags handling remains the same
     if (body.tags && Array.isArray(body.tags) && body.tags.length > 0) {
       for (const tagName of body.tags) {
         if (typeof tagName !== 'string' || tagName.trim() === '') continue;
@@ -202,7 +202,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: 'Documento (metadados) criado com sucesso. Upload de arquivo pendente.',
+      message: 'Metadados do documento criados com sucesso.', // Adjusted message
       documento: formatarDocumentoMySQL(createdDocRows[0])
     }, { status: 201 });
 
