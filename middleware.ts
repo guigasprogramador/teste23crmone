@@ -10,7 +10,7 @@ const publicRoutes = [
   "/auth/reset-password",
   "/api/auth/login",
   "/api/auth/register",
-  "/api/auth/refresh",
+  "/api/auth/refresh", // Keep /api/auth/refresh public as client will call it
   "/api/auth/microsoft",
   "/api/auth/microsoft/callback",
 ];
@@ -20,80 +20,56 @@ const isPublicRoute = (path: string) => {
   return publicRoutes.some((route) => path.startsWith(route)) || path.startsWith("/_next") || path.startsWith("/favicon.ico");
 };
 
+const JWT_SECRET_BYTES = new TextEncoder().encode(process.env.JWT_SECRET || "your-secret-key");
+
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
-  
-  // Check if it's a public route
+
+  // 1. Check if it's a public route
   if (isPublicRoute(path)) {
     return NextResponse.next();
   }
-  
-  // Check for access token cookie
+
   const accessToken = request.cookies.get("accessToken")?.value;
   const refreshToken = request.cookies.get("refreshToken")?.value;
-  
-  // If there's no access token, try to use refresh token
-  if (!accessToken) {
-    // If there's no refresh token either, redirect to login
-    if (!refreshToken) {
-      const url = new URL("/auth/login", request.url);
-      url.searchParams.set("redirect", encodeURIComponent(request.nextUrl.pathname));
-      return NextResponse.redirect(url);
-    }
-    
-    // Try to get a new access token using the refresh token
+  const loginUrl = new URL("/auth/login", request.url);
+  loginUrl.searchParams.set("redirect", encodeURIComponent(request.nextUrl.pathname + request.nextUrl.search));
+
+
+  // Scenario 1: accessToken is present
+  if (accessToken) {
     try {
-      const response = await fetch(new URL("/api/auth/refresh", request.url).toString(), {
-        method: "GET",
-        headers: {
-          Cookie: `refreshToken=${refreshToken}`,
-        },
-      });
-      
-      if (!response.ok) {
-        throw new Error("Failed to refresh token");
-      }
-      
-      const data = await response.json();
-      
-      // If token refresh successful, continue with the request and set the new token
-      const newResponse = NextResponse.next();
-      newResponse.cookies.set({
-        name: "accessToken",
-        value: data.accessToken,
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: 60 * 60, // 1 hour
-        path: "/",
-      });
-      
-      return newResponse;
+      await jwtVerify(accessToken, JWT_SECRET_BYTES);
+      // Access token is valid, proceed
+      return NextResponse.next();
     } catch (error) {
-      // If token refresh fails, redirect to login
-      const url = new URL("/auth/login", request.url);
-      url.searchParams.set("redirect", encodeURIComponent(request.nextUrl.pathname));
-      return NextResponse.redirect(url);
+      // Access token verification failed (e.g., expired, invalid)
+      console.log("Access token verification failed:", error.message);
+      // If refresh token exists, let client-side handle refresh
+      if (refreshToken) {
+        console.log("Refresh token exists, deferring to client-side for refresh.");
+        // It's important to allow the request to proceed so client-side can attempt refresh.
+        // The client-side will hit the actual protected API, which will fail,
+        // and then the client's error handling (e.g., in useAuth) should trigger refreshToken.
+        return NextResponse.next();
+      } else {
+        // No refresh token, redirect to login
+        console.log("No refresh token, redirecting to login.");
+        return NextResponse.redirect(loginUrl);
+      }
     }
   }
-  
-  // Verify access token
-  try {
-    const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || "your-secret-key");
-    await jwtVerify(accessToken, JWT_SECRET);
-    
-    // Token is valid, continue with the request
-    return NextResponse.next();
-  } catch (error) {
-    // If token is invalid, try to use refresh token
+  // Scenario 2: accessToken is NOT present
+  else {
     if (refreshToken) {
-      return NextResponse.redirect(new URL("/api/auth/refresh?redirect=" + encodeURIComponent(request.nextUrl.pathname), request.url));
+      // No access token, but refresh token exists. Let client-side handle refresh.
+      console.log("No access token, but refresh token exists. Deferring to client-side for refresh.");
+      return NextResponse.next();
+    } else {
+      // No access token and no refresh token, redirect to login
+      console.log("No access token and no refresh token, redirecting to login.");
+      return NextResponse.redirect(loginUrl);
     }
-    
-    // If no refresh token, redirect to login
-    const url = new URL("/auth/login", request.url);
-    url.searchParams.set("redirect", encodeURIComponent(request.nextUrl.pathname));
-    return NextResponse.redirect(url);
   }
 }
 
