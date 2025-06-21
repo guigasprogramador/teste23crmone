@@ -91,11 +91,6 @@ export function useLicitacoes() {
     // ... mais exemplos se necessário, seguindo a nova interface Licitacao
   ];
 
-  // Função para obter o token de autenticação
-  const getAuthToken = () => {
-    return localStorage.getItem('accessToken');
-  };
-
   // Buscar todas as licitações
   const fetchLicitacoes = useCallback(async () => {
     // Verificar se temos dados em cache recentes (menos de 5 minutos)
@@ -121,11 +116,12 @@ export function useLicitacoes() {
       
       // Tentar buscar da API em paralelo
       try {
-        const token = getAuthToken();
+        // const token = getAuthToken(); // REMOVED
         const response = await fetch('/api/licitacoes', {
           method: 'GET',
+          credentials: 'include', // ADDED
           headers: {
-            'Authorization': token ? `Bearer ${token}` : '',
+            // 'Authorization': token ? `Bearer ${token}` : '', // REMOVED
             'Content-Type': 'application/json'
           }
         });
@@ -198,15 +194,16 @@ export function useLicitacoes() {
     setError(null);
 
     try {
-      const token = getAuthToken();
-      if (!token) {
-        throw new Error('Não autenticado');
-      }
+      // const token = getAuthToken(); // REMOVED
+      // if (!token) { // REMOVED
+      //   throw new Error('Não autenticado');
+      // }
 
       const response = await fetch(`/api/licitacoes/${id}`, {
         method: 'GET',
+        credentials: 'include', // ADDED
         headers: {
-          'Authorization': `Bearer ${token}`,
+          // 'Authorization': `Bearer ${token}`, // REMOVED
           'Content-Type': 'application/json'
         }
       });
@@ -232,12 +229,13 @@ export function useLicitacoes() {
     setLoading(true);
     setError(null);
     try {
-      const token = getAuthToken();
+      // const token = getAuthToken(); // REMOVED
       const response = await fetch('/api/licitacoes', {
         method: 'POST',
+        credentials: 'include', // ADDED
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : '',
+          // 'Authorization': token ? `Bearer ${token}` : '', // REMOVED
         },
         body: JSON.stringify(licitacaoData),
       });
@@ -262,12 +260,13 @@ export function useLicitacoes() {
     setLoading(true);
     setError(null);
     try {
-      const token = getAuthToken();
+      // const token = getAuthToken(); // REMOVED
       const response = await fetch(`/api/licitacoes/${id}`, {
         method: 'PUT',
+        credentials: 'include', // ADDED
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : '',
+          // 'Authorization': token ? `Bearer ${token}` : '', // REMOVED
         },
         body: JSON.stringify(licitacaoData),
       });
@@ -292,11 +291,12 @@ export function useLicitacoes() {
     setLoading(true);
     setError(null);
     try {
-      const token = getAuthToken();
+      // const token = getAuthToken(); // REMOVED
       const response = await fetch(`/api/licitacoes/${id}`, {
         method: 'DELETE',
+        credentials: 'include', // ADDED
         headers: {
-          'Authorization': token ? `Bearer ${token}` : '',
+          // 'Authorization': token ? `Bearer ${token}` : '', // REMOVED
         },
       });
       if (!response.ok) {

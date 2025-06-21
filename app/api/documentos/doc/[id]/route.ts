@@ -57,11 +57,17 @@ export async function GET(request: NextRequest, { params }: PathParams) {
   console.log(`GET /api/documentos/doc/${documentoId} for licitacao ${licitacaoId} - MySQL`);
 
   try {
+    let token = request.cookies.get('accessToken')?.value;
     const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for GET /api/documentos/doc/[id]");
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token) {
       return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
-    const token = authHeader.split(' ')[1];
     const decodedToken = await verifyJwtToken(token);
     if (!decodedToken || !decodedToken.userId) {
       return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
@@ -118,11 +124,17 @@ export async function PATCH(request: NextRequest, { params }: PathParams) {
   console.log(`PATCH /api/documentos/doc/${documentoId} for licitacao ${licitacaoId} - MySQL`);
 
   try {
+    let token = request.cookies.get('accessToken')?.value;
     const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for PATCH /api/documentos/doc/[id]");
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token) {
       return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
-    const token = authHeader.split(' ')[1];
     const decodedToken = await verifyJwtToken(token);
     if (!decodedToken || !decodedToken.userId) {
       return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
@@ -231,11 +243,17 @@ export async function DELETE(request: NextRequest, { params }: PathParams) {
   const { id: licitacaoId, documentoId } = params; // Correctly name params
   console.log(`DELETE /api/documentos/doc/${documentoId} for licitacao ${licitacaoId} - MySQL`);
   try {
+    let token = request.cookies.get('accessToken')?.value;
     const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for DELETE /api/documentos/doc/[id]");
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token) {
       return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
-    const token = authHeader.split(' ')[1];
     const decodedToken = await verifyJwtToken(token);
     if (!decodedToken || !decodedToken.userId) {
       return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });

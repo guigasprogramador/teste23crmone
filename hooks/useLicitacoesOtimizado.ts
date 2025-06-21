@@ -190,16 +190,17 @@ export function useLicitacoesOtimizado() {
             if (filtros.valorMaximo) params.append('valorMax', filtros.valorMaximo.toString());
           }
           
-          // Obter token de autenticau00e7u00e3o
-          const accessToken = localStorage.getItem('accessToken');
+          // Obter token de autenticau00e7u00e3o - REMOVED
+          // const accessToken = localStorage.getItem('accessToken');
           
           console.log('Buscando licitau00e7u00f5es com paru00e2metros:', params.toString());
           const response = await fetch(`/api/licitacoes?${params.toString()}`, {
             method: 'GET',
+            credentials: 'include', // ADDED
             headers: {
               'Cache-Control': 'no-cache',
               'Pragma': 'no-cache',
-              'Authorization': `Bearer ${accessToken}`
+              // 'Authorization': `Bearer ${accessToken}` // REMOVED
             }
           });
           
@@ -253,15 +254,16 @@ export function useLicitacoesOtimizado() {
         return requestCache[cacheKey].data;
       }
       
-      // Obter token de autenticau00e7u00e3o
-      const accessToken = localStorage.getItem('accessToken');
+      // Obter token de autenticau00e7u00e3o - REMOVED
+      // const accessToken = localStorage.getItem('accessToken');
       
       const statsResponse = await fetch('/api/licitacoes?estatisticas=true', {
         method: 'GET',
+        credentials: 'include', // ADDED
         headers: {
           'Cache-Control': 'no-cache',
           'Pragma': 'no-cache',
-          'Authorization': `Bearer ${accessToken}`
+          // 'Authorization': `Bearer ${accessToken}` // REMOVED
         }
       });
       
@@ -310,14 +312,15 @@ export function useLicitacoesOtimizado() {
     try {
       setIsLoading(true);
       
-      // Obter token de autenticau00e7u00e3o
-      const accessToken = localStorage.getItem('accessToken');
+      // Obter token de autenticau00e7u00e3o - REMOVED
+      // const accessToken = localStorage.getItem('accessToken');
       
       const response = await fetch('/api/licitacoes', {
         method: 'POST',
+        credentials: 'include', // ADDED
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`
+          // 'Authorization': `Bearer ${accessToken}` // REMOVED
         },
         body: JSON.stringify(novaLicitacao)
       });
@@ -351,14 +354,15 @@ export function useLicitacoesOtimizado() {
     try {
       setIsLoading(true);
       
-      // Obter token de autenticau00e7u00e3o
-      const accessToken = localStorage.getItem('accessToken');
+      // Obter token de autenticau00e7u00e3o - REMOVED
+      // const accessToken = localStorage.getItem('accessToken');
       
       const response = await fetch(`/api/licitacoes/${id}`, {
         method: 'PUT',
+        credentials: 'include', // ADDED
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`
+          // 'Authorization': `Bearer ${accessToken}` // REMOVED
         },
         body: JSON.stringify(dadosAtualizados)
       });
@@ -392,13 +396,14 @@ export function useLicitacoesOtimizado() {
     try {
       setIsLoading(true);
       
-      // Obter token de autenticau00e7u00e3o
-      const accessToken = localStorage.getItem('accessToken');
+      // Obter token de autenticau00e7u00e3o - REMOVED
+      // const accessToken = localStorage.getItem('accessToken');
       
       const response = await fetch(`/api/licitacoes/${id}`, {
         method: 'DELETE',
+        credentials: 'include', // ADDED
         headers: {
-          'Authorization': `Bearer ${accessToken}`
+          // 'Authorization': `Bearer ${accessToken}` // REMOVED
         }
       });
       

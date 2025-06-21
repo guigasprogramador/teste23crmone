@@ -6,16 +6,22 @@ import { verifyJwtToken } from "@/lib/auth/jwt";
 export async function GET(request: NextRequest) {
   try {
     // Verificar autenticação
-    const accessToken = request.cookies.get("accessToken")?.value;
+    let token = request.cookies.get("accessToken")?.value;
+    const authHeader = request.headers.get('authorization');
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for GET /api/users/profile");
+      token = authHeader.split(' ')[1];
+    }
     
-    if (!accessToken) {
+    if (!token) {
       return NextResponse.json(
-        { error: "Não autorizado" },
+        { error: "Não autorizado: token não fornecido" },
         { status: 401 }
       );
     }
     
-    const payload = await verifyJwtToken(accessToken);
+    const payload = await verifyJwtToken(token);
     
     if (!payload || !payload.userId) {
       return NextResponse.json(
@@ -111,16 +117,22 @@ export async function GET(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     // Verificar autenticação
-    const accessToken = request.cookies.get("accessToken")?.value;
+    let token = request.cookies.get("accessToken")?.value;
+    const authHeader = request.headers.get('authorization');
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for PUT /api/users/profile");
+      token = authHeader.split(' ')[1];
+    }
     
-    if (!accessToken) {
+    if (!token) {
       return NextResponse.json(
-        { error: "Não autorizado" },
+        { error: "Não autorizado: token não fornecido" },
         { status: 401 }
       );
     }
     
-    const payload = await verifyJwtToken(accessToken);
+    const payload = await verifyJwtToken(token);
     
     if (!payload || !payload.userId) {
       return NextResponse.json(

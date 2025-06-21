@@ -28,8 +28,19 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 
   try {
     // 1. Authentication
-    const tokenPayload = await verifyJwtToken(request);
-    if (!tokenPayload) {
+    let token = request.cookies.get('accessToken')?.value;
+    const authHeader = request.headers.get('authorization');
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for GET /api/documentos/doc/[id]/download");
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token) {
+      return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
+    }
+    const tokenPayload = await verifyJwtToken(token); // Assuming verifyJwtToken takes a token string
+    if (!tokenPayload) { // verifyJwtToken might return null or throw, so check payload
       return NextResponse.json({ error: 'Não autorizado ou token inválido' }, { status: 401 });
     }
 

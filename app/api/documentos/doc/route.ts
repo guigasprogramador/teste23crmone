@@ -47,11 +47,17 @@ export async function GET(request: NextRequest) {
   let connection;
   console.log("GET /api/documentos/doc - Iniciando consulta com MySQL");
   try {
+    let token = request.cookies.get('accessToken')?.value;
     const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for GET /api/documentos/doc");
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token) {
       return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
-    const token = authHeader.split(' ')[1];
     const decodedToken = await verifyJwtToken(token);
     if (!decodedToken || !decodedToken.userId) {
       return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
@@ -122,11 +128,17 @@ export async function POST(request: NextRequest) {
   let connection;
   console.log("POST /api/documentos/doc - Iniciando criação com MySQL");
   try {
+    let token = request.cookies.get('accessToken')?.value;
     const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for POST /api/documentos/doc");
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token) {
       return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
-    const token = authHeader.split(' ')[1];
     const decodedToken = await verifyJwtToken(token);
     if (!decodedToken || !decodedToken.userId) {
       return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
@@ -226,11 +238,17 @@ export async function PATCH(request: NextRequest) {
   let connection;
   console.log("PATCH /api/documentos/doc - Iniciando atualização com MySQL");
   try {
+    let token = request.cookies.get('accessToken')?.value;
     const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for PATCH /api/documentos/doc");
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token) {
       return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
-    const token = authHeader.split(' ')[1];
     const decodedToken = await verifyJwtToken(token); // Valida e decodifica
     if (!decodedToken || !decodedToken.userId) {
       return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
@@ -329,11 +347,17 @@ export async function DELETE(request: NextRequest) {
   let connection;
   console.log("DELETE /api/documentos/doc - Iniciando exclusão com MySQL");
   try {
+    let token = request.cookies.get('accessToken')?.value;
     const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for DELETE /api/documentos/doc");
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token) {
       return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
-    const token = authHeader.split(' ')[1];
     const decodedToken = await verifyJwtToken(token);
     if (!decodedToken || !decodedToken.userId) {
       return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });

@@ -9,16 +9,22 @@ export async function GET(
 ) {
   try {
     // Verify user is authenticated
-    const accessToken = request.cookies.get("accessToken")?.value;
+    let token = request.cookies.get("accessToken")?.value;
+    const authHeader = request.headers.get('authorization');
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for GET /api/users/[id]");
+      token = authHeader.split(' ')[1];
+    }
     
-    if (!accessToken) {
+    if (!token) {
       return NextResponse.json(
-        { error: "Não autorizado" },
+        { error: "Não autorizado: token não fornecido" },
         { status: 401 }
       );
     }
     
-    const payload = await verifyJwtToken(accessToken);
+    const payload = await verifyJwtToken(token);
     
     if (!payload || !payload.userId) {
       return NextResponse.json(
@@ -67,16 +73,22 @@ export async function PUT(
 ) {
   try {
     // Verify user is authenticated
-    const accessToken = request.cookies.get("accessToken")?.value;
+    let token = request.cookies.get("accessToken")?.value;
+    const authHeader = request.headers.get('authorization');
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for PUT /api/users/[id]");
+      token = authHeader.split(' ')[1];
+    }
     
-    if (!accessToken) {
+    if (!token) {
       return NextResponse.json(
-        { error: "Não autorizado" },
+        { error: "Não autorizado: token não fornecido" },
         { status: 401 }
       );
     }
     
-    const payload = await verifyJwtToken(accessToken);
+    const payload = await verifyJwtToken(token);
     
     if (!payload || !payload.userId) {
       return NextResponse.json(
@@ -147,16 +159,22 @@ export async function DELETE(
 ) {
   try {
     // Verify user is authenticated and is admin
-    const accessToken = request.cookies.get("accessToken")?.value;
+    let token = request.cookies.get("accessToken")?.value;
+    const authHeader = request.headers.get('authorization');
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for DELETE /api/users/[id]");
+      token = authHeader.split(' ')[1];
+    }
     
-    if (!accessToken) {
+    if (!token) {
       return NextResponse.json(
-        { error: "Não autorizado" },
+        { error: "Não autorizado: token não fornecido" },
         { status: 401 }
       );
     }
     
-    const payload = await verifyJwtToken(accessToken);
+    const payload = await verifyJwtToken(token);
     
     if (!payload || !payload.userId) {
       return NextResponse.json(

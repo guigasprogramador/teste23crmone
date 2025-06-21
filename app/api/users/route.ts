@@ -7,16 +7,22 @@ import bcrypt from "bcryptjs";
 export async function GET(request: NextRequest) {
   try {
     // Verificar se o usuário está autenticado
-    const accessToken = request.cookies.get("accessToken")?.value;
+    let token = request.cookies.get("accessToken")?.value;
+    const authHeader = request.headers.get('authorization');
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for GET /api/users");
+      token = authHeader.split(' ')[1];
+    }
     
-    if (!accessToken) {
+    if (!token) {
       return NextResponse.json(
-        { error: "Não autorizado" },
+        { error: "Não autorizado: token não fornecido" },
         { status: 401 }
       );
     }
     
-    const payload = await verifyJwtToken(accessToken);
+    const payload = await verifyJwtToken(token);
     
     if (!payload || !payload.userId || payload.role !== "admin") {
       return NextResponse.json(
@@ -53,16 +59,22 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     // Verificar se o usuário está autenticado como admin
-    const accessToken = request.cookies.get("accessToken")?.value;
+    let token = request.cookies.get("accessToken")?.value;
+    const authHeader = request.headers.get('authorization');
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for POST /api/users");
+      token = authHeader.split(' ')[1];
+    }
     
-    if (!accessToken) {
+    if (!token) {
       return NextResponse.json(
-        { error: "Não autorizado" },
+        { error: "Não autorizado: token não fornecido" },
         { status: 401 }
       );
     }
     
-    const payload = await verifyJwtToken(accessToken);
+    const payload = await verifyJwtToken(token);
     
     if (!payload || !payload.userId || payload.role !== "admin") {
       return NextResponse.json(

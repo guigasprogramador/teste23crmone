@@ -42,7 +42,18 @@ const formatDocumentForResponse = async (connection: any, documentId: string) =>
 export async function POST(request: NextRequest) {
   let connection;
   try {
-    const tokenPayload = await verifyJwtToken(request);
+    let token = request.cookies.get('accessToken')?.value;
+    const authHeader = request.headers.get('authorization');
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for POST /api/documentos/doc/upload");
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token) {
+      return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
+    }
+    const tokenPayload = await verifyJwtToken(token); // Assuming verifyJwtToken takes a token string
     if (!tokenPayload || !tokenPayload.userId) {
       return NextResponse.json({ error: 'Não autorizado ou token inválido' }, { status: 401 });
     }
