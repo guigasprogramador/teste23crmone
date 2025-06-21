@@ -105,6 +105,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 
       setUser(data.user);
       setIsAuthenticated(true);
+      localStorage.setItem('accessToken', data.accessToken); // Store the new accessToken
     } catch (error) {
       console.error("Erro ao renovar token:", error);
       setUser(null);
