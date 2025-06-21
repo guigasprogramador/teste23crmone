@@ -277,6 +277,53 @@ export function useDocuments() {
     }
   }, [createDocument]);
 
+  // Excluir um documento
+  const deleteDocument = useCallback(async (id: string, fisicamente: boolean = false) => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        throw new Error('Não autenticado');
+      }
+
+      // A API DELETE em /api/documentos/doc/[id] agora lida com o parâmetro 'fisicamente'
+      const url = `/api/documentos/doc/${id}?fisicamente=${fisicamente}`;
+
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          // Content-Type não é usualmente necessário para DELETE se não houver corpo
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({error: `Erro ao excluir documento: ${response.statusText}`}));
+        throw new Error(errorData.error || `Erro ao excluir documento: ${response.status}`);
+      }
+
+      // Remover ou atualizar o documento na lista local
+      if (fisicamente) {
+        setDocuments(prevDocs => prevDocs.filter(doc => doc.id !== id));
+      } else {
+        setDocuments(prevDocs =>
+          prevDocs.map(doc => (doc.id === id ? { ...doc, status: 'excluido' } : doc))
+        );
+      }
+
+      const data = await response.json(); // API retorna { success: true, message: '...' }
+      return data.success; // Retornar boolean para delete
+    } catch (err: any) {
+      console.error('Erro ao excluir documento:', err);
+      setError(err.message);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   // Atualizar um documento existente
   const updateDocument = useCallback(async (id: string, updateData: Partial<DocumentFormData>) => {
     setLoading(true);
@@ -378,53 +425,6 @@ export function useDocuments() {
       setLoading(false);
     }
   }, [fetchDocumentById, uploadDocument, deleteDocument]);
-
-  // Excluir um documento
-  const deleteDocument = useCallback(async (id: string, fisicamente: boolean = false) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const token = getAuthToken();
-      if (!token) {
-        throw new Error('Não autenticado');
-      }
-
-      // A API DELETE em /api/documentos/doc/[id] agora lida com o parâmetro 'fisicamente'
-      const url = `/api/documentos/doc/${id}?fisicamente=${fisicamente}`;
-      
-      const response = await fetch(url, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          // Content-Type não é usualmente necessário para DELETE se não houver corpo
-        }
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({error: `Erro ao excluir documento: ${response.statusText}`}));
-        throw new Error(errorData.error || `Erro ao excluir documento: ${response.status}`);
-      }
-
-      // Remover ou atualizar o documento na lista local
-      if (fisicamente) {
-        setDocuments(prevDocs => prevDocs.filter(doc => doc.id !== id));
-      } else {
-        setDocuments(prevDocs => 
-          prevDocs.map(doc => (doc.id === id ? { ...doc, status: 'excluido' } : doc))
-        );
-      }
-      
-      const data = await response.json(); // API retorna { success: true, message: '...' }
-      return data.success; // Retornar boolean para delete
-    } catch (err: any) {
-      console.error('Erro ao excluir documento:', err);
-      setError(err.message);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
   return {
     documents,

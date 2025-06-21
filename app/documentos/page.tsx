@@ -384,17 +384,15 @@ export default function DocumentosPage() {
   const handleDownload = (documento: Documento, e: React.MouseEvent) => {
     e.stopPropagation()
     
-    const downloadUrl = documento.url || 
-      (documento.arquivo_path ? 
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/documentos/${documento.arquivo_path}` : 
-        null)
+    // Nova URL de download para a API
+    const newDownloadUrl = `/api/documentos/doc/${documento.id}/download`;
     
-    if (downloadUrl) {
-      window.open(downloadUrl, '_blank')
+    if (documento.id) { // Garante que o ID do documento existe
+      window.open(newDownloadUrl, '_blank');
     } else {
       toast({
         title: "Erro ao baixar documento",
-        description: "URL do documento não encontrada.",
+        description: "ID do documento não encontrado ou inválido.",
         variant: "destructive"
       })
     }
