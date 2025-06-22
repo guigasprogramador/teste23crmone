@@ -37,7 +37,7 @@ function formatarDocumentoMySQL(item: any): any {
     descricao: item.descricao,
     numeroDocumento: item.numero_documento,
     dataValidade: formatDateToDDMMYYYY(item.data_validade),
-    categoriaLegado: item.categoria_legado,
+    categoriaLegado: item.categoria, // Changed from item.categoria_legado
     tags: item.tags_concatenadas ? item.tags_concatenadas.split(', ') : [],
   };
 }
@@ -47,11 +47,17 @@ export async function GET(request: NextRequest) {
   let connection;
   console.log("GET /api/documentos - Iniciando consulta com MySQL");
   try {
+    let token = request.cookies.get('accessToken')?.value;
     const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for GET /api/documentos");
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token) {
       return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
-    const token = authHeader.split(' ')[1];
     const decodedToken = await verifyJwtToken(token);
     if (!decodedToken || !decodedToken.userId) {
       return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
@@ -66,7 +72,7 @@ export async function GET(request: NextRequest) {
           d.tamanho, d.status, d.criado_por, u_creator.name as criado_por_nome,
           d.data_criacao, d.data_atualizacao,
           d.licitacao_id, l.titulo as licitacao_titulo,
-          d.descricao, d.numero_documento, d.data_validade, d.categoria AS categoria_legado,
+          d.descricao, d.numero_documento, d.data_validade, d.categoria, -- Changed from d.categoria AS categoria_legado
           (SELECT GROUP_CONCAT(t.nome SEPARATOR ', ')
            FROM tags t JOIN documentos_tags dt ON t.id = dt.tag_id
            WHERE dt.documento_id = d.id) as tags_concatenadas
@@ -122,11 +128,17 @@ export async function POST(request: NextRequest) {
   let connection;
   console.log("POST /api/documentos - Iniciando criação de metadados de documento com MySQL");
   try {
+    let token = request.cookies.get('accessToken')?.value;
     const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      console.log("Token not found in cookie, attempting to use Authorization header for POST /api/documentos");
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token) {
       return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
-    const token = authHeader.split(' ')[1];
     const decodedToken = await verifyJwtToken(token);
     if (!decodedToken || !decodedToken.userId) {
       return NextResponse.json({ error: 'Não autorizado: token inválido' }, { status: 401 });
