@@ -1,154 +1,141 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase/client";
+import { getDbConnection } from "@/lib/mysql/client"; // MySQL client
 import { verifyJwtToken } from "@/lib/auth/jwt";
+
+// Helper to format user for API response (camelCase) - can be shared
+function formatUserResponse(user: any) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    avatarUrl: user.avatar_url,
+    createdAt: user.created_at,
+    updatedAt: user.updated_at, // Include updated_at
+  };
+}
 
 // Get a specific user
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let connection;
   try {
-    // Verify user is authenticated
     let token = request.cookies.get("accessToken")?.value;
     const authHeader = request.headers.get('authorization');
 
     if (!token && authHeader && authHeader.startsWith('Bearer ')) {
-      console.log("Token not found in cookie, attempting to use Authorization header for GET /api/users/[id]");
       token = authHeader.split(' ')[1];
     }
     
     if (!token) {
-      return NextResponse.json(
-        { error: "Não autorizado: token não fornecido" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Não autorizado: token não fornecido" }, { status: 401 });
     }
     
     const payload = await verifyJwtToken(token);
-    
     if (!payload || !payload.userId) {
-      return NextResponse.json(
-        { error: "Token inválido" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Token inválido" }, { status: 401 });
     }
     
-    // Check if user has permission
     if (payload.userId !== params.id && payload.role !== "admin") {
-      return NextResponse.json(
-        { error: "Acesso negado. Você não tem permissão para visualizar este usuário." },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "Acesso negado." }, { status: 403 });
     }
-    
-    // Get user
-    const { data: user, error } = await supabase
-      .from("crmonefactory.users")
-      .select("id, name, email, role, avatar_url, created_at")
-      .eq("id", params.id)
-      .single();
-    
-    if (error) {
-      console.error("Error fetching user:", error);
-      return NextResponse.json(
-        { error: "Usuário não encontrado" },
-        { status: 404 }
-      );
-    }
-    
-    return NextResponse.json({ user });
-  } catch (error) {
-    console.error("Error getting user:", error);
-    return NextResponse.json(
-      { error: "Erro interno do servidor" },
-      { status: 500 }
+
+    connection = await getDbConnection();
+    const [rows]: any = await connection.execute(
+      "SELECT id, name, email, role, avatar_url, created_at, updated_at FROM users WHERE id = ?",
+      [params.id]
     );
+
+    if (rows.length === 0) {
+      return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 });
+    }
+
+    return NextResponse.json({ user: formatUserResponse(rows[0]) });
+
+  } catch (error: any) {
+    console.error("Error getting user (MySQL):", error);
+    return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 });
+  } finally {
+    if (connection) await connection.release();
   }
 }
 
-// Update a user (admin only, except for self-updates)
+// Update a user
 export async function PUT(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let connection;
   try {
-    // Verify user is authenticated
     let token = request.cookies.get("accessToken")?.value;
     const authHeader = request.headers.get('authorization');
 
     if (!token && authHeader && authHeader.startsWith('Bearer ')) {
-      console.log("Token not found in cookie, attempting to use Authorization header for PUT /api/users/[id]");
       token = authHeader.split(' ')[1];
     }
     
     if (!token) {
-      return NextResponse.json(
-        { error: "Não autorizado: token não fornecido" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Não autorizado: token não fornecido" }, { status: 401 });
     }
     
     const payload = await verifyJwtToken(token);
-    
     if (!payload || !payload.userId) {
-      return NextResponse.json(
-        { error: "Token inválido" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Token inválido" }, { status: 401 });
     }
     
-    // Check if user has permission
     if (payload.userId !== params.id && payload.role !== "admin") {
-      return NextResponse.json(
-        { error: "Acesso negado. Você não tem permissão para editar este usuário." },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "Acesso negado." }, { status: 403 });
     }
     
     const body = await request.json();
     
-    // If the update includes changing the role, only admins can do this
     if (body.role && payload.role !== "admin") {
-      return NextResponse.json(
-        { error: "Acesso negado. Apenas administradores podem alterar funções." },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "Apenas administradores podem alterar funções." }, { status: 403 });
     }
     
-    // Update user
-    const updateData: any = {};
+    connection = await getDbConnection();
     
-    // Only allow specific fields to be updated
-    if (body.name) updateData.name = body.name;
-    if (body.role && payload.role === "admin") updateData.role = body.role;
+    const updateFields: string[] = [];
+    const updateValues: any[] = [];
+
+    if (body.name !== undefined) { updateFields.push("name = ?"); updateValues.push(body.name); }
+    if (body.avatarUrl !== undefined) { updateFields.push("avatar_url = ?"); updateValues.push(body.avatarUrl); }
+    if (body.role && payload.role === "admin") { updateFields.push("role = ?"); updateValues.push(body.role); }
+    // Password and microsoft_id changes would typically be handled by separate, more specific endpoints.
+
+    if (updateFields.length === 0) {
+      return NextResponse.json({ error: "Nenhum campo válido para atualização fornecido" }, { status: 400 });
+    }
+
+    updateFields.push("updated_at = NOW()");
+    updateValues.push(params.id); // For WHERE id = ?
+
+    const sql = `UPDATE users SET ${updateFields.join(", ")} WHERE id = ?`;
     
-    // Add updated_at timestamp
-    updateData.updated_at = new Date().toISOString();
-    
-    const { data: updatedUser, error } = await supabase
-      .from("crmonefactory.users")
-      .update(updateData)
-      .eq("id", params.id)
-      .select("id, name, email, role, avatar_url, created_at");
-    
-    if (error) {
-      console.error("Error updating user:", error);
-      return NextResponse.json(
-        { error: "Erro ao atualizar usuário" },
-        { status: 500 }
-      );
+    const [result]: any = await connection.execute(sql, updateValues);
+
+    if (result.affectedRows === 0) {
+      return NextResponse.json({ error: "Usuário não encontrado ou nenhum dado alterado" }, { status: 404 });
     }
     
+    const [updatedUserRows]: any = await connection.execute(
+      "SELECT id, name, email, role, avatar_url, created_at, updated_at FROM users WHERE id = ?",
+      [params.id]
+    );
+
     return NextResponse.json({
       message: "Usuário atualizado com sucesso",
-      user: updatedUser[0],
+      user: formatUserResponse(updatedUserRows[0]),
     });
-  } catch (error) {
-    console.error("Error updating user:", error);
-    return NextResponse.json(
-      { error: "Erro interno do servidor" },
-      { status: 500 }
-    );
+
+  } catch (error: any) {
+    console.error("Error updating user (MySQL):", error);
+    return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 });
+  } finally {
+    if (connection) await connection.release();
   }
 }
 
@@ -157,70 +144,52 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let connection;
   try {
-    // Verify user is authenticated and is admin
     let token = request.cookies.get("accessToken")?.value;
     const authHeader = request.headers.get('authorization');
 
     if (!token && authHeader && authHeader.startsWith('Bearer ')) {
-      console.log("Token not found in cookie, attempting to use Authorization header for DELETE /api/users/[id]");
       token = authHeader.split(' ')[1];
     }
     
     if (!token) {
-      return NextResponse.json(
-        { error: "Não autorizado: token não fornecido" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Não autorizado: token não fornecido" }, { status: 401 });
     }
     
     const payload = await verifyJwtToken(token);
-    
     if (!payload || !payload.userId) {
-      return NextResponse.json(
-        { error: "Token inválido" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Token inválido" }, { status: 401 });
     }
     
-    // Only admins can delete users
     if (payload.role !== "admin") {
-      return NextResponse.json(
-        { error: "Acesso negado. Apenas administradores podem remover usuários." },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "Acesso negado. Somente administradores." }, { status: 403 });
     }
     
-    // Prevent admins from deleting themselves
     if (payload.userId === params.id) {
-      return NextResponse.json(
-        { error: "Você não pode remover sua própria conta." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Você não pode remover sua própria conta." }, { status: 400 });
     }
     
-    // Delete user
-    const { error } = await supabase
-      .from("crmonefactory.users")
-      .delete()
-      .eq("id", params.id);
+    connection = await getDbConnection();
+    // Consider ON DELETE CASCADE for related user_profiles, user_preferences, refresh_tokens
+    // or handle their deletion explicitly here if not set in DB.
+    // For now, just deleting from users table.
+    const [result]: any = await connection.execute("DELETE FROM users WHERE id = ?", [params.id]);
     
-    if (error) {
-      console.error("Error deleting user:", error);
-      return NextResponse.json(
-        { error: "Erro ao remover usuário" },
-        { status: 500 }
-      );
+    if (result.affectedRows === 0) {
+      return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 });
     }
     
-    return NextResponse.json({
-      message: "Usuário removido com sucesso",
-    });
-  } catch (error) {
-    console.error("Error deleting user:", error);
-    return NextResponse.json(
-      { error: "Erro interno do servidor" },
-      { status: 500 }
-    );
+    return NextResponse.json({ message: "Usuário removido com sucesso" });
+
+  } catch (error: any) {
+    console.error("Error deleting user (MySQL):", error);
+    // Handle foreign key constraint errors if related data isn't deleted and CASCADE isn't set
+    if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+        return NextResponse.json({ error: "Não é possível remover o usuário, pois ele possui dados relacionados." }, { status: 409 });
+    }
+    return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 });
+  } finally {
+    if (connection) await connection.release();
   }
 }
