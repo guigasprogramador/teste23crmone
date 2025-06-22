@@ -36,7 +36,7 @@ function formatarDocumentoMySQL(item: any): any { // Ajustar 'any' para um tipo 
     descricao: item.descricao,
     numeroDocumento: item.numero_documento,
     dataValidade: formatDateToDDMMYYYY(item.data_validade),
-    categoriaLegado: item.categoria_legado, // Mantendo o campo legado se existir no DB
+    categoriaLegado: item.categoria, // Changed from item.categoria_legado to item.categoria
     tags: item.tags_concatenadas ? item.tags_concatenadas.split(', ') : [],
   };
 }
@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
           d.tamanho, d.status, d.criado_por, u_creator.name as criado_por_nome,
           d.data_criacao, d.data_atualizacao,
           d.licitacao_id, l.titulo as licitacao_titulo,
-          d.descricao, d.numero_documento, d.data_validade, d.categoria AS categoria_legado,
+          d.descricao, d.numero_documento, d.data_validade, d.categoria, -- Changed from d.categoria AS categoria_legado
           (SELECT GROUP_CONCAT(t.nome SEPARATOR ', ')
            FROM tags t JOIN documentos_tags dt ON t.id = dt.tag_id
            WHERE dt.documento_id = d.id) as tags_concatenadas

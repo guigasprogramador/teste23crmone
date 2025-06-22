@@ -327,12 +327,12 @@ export async function POST(request: NextRequest) {
     const dataAtual = new Date(); // Para created_at e updated_at
 
     // Mapear e converter dados para o formato do DB (snake_case)
-    const licitacaoDb = {
+    const licitacaoDb: any = { // Added :any for dynamic property deletion
       id: newLicId,
       titulo: licitacaoData.titulo,
       status: licitacaoData.status || 'analise_interna', // Default status
       modalidade: licitacaoData.modalidade,
-      numero_processo: licitacaoData.numeroProcesso || null,
+      // numero_processo: licitacaoData.numeroProcesso || null, // REMOVED
       objeto: licitacaoData.objeto || null,
       edital: licitacaoData.edital || null,
       numero_edital: licitacaoData.numeroEdital || null,
@@ -357,6 +357,10 @@ export async function POST(request: NextRequest) {
       posicao_kanban: licitacaoData.posicaoKanban || 0,
       // data_criacao e data_atualizacao serão definidos como NOW() no insert
     };
+
+    // Conditionally add numero_processo if it exists in licitacaoData and is not null/undefined
+    // However, the task is to REMOVE it due to "Unknown column" error, so we ensure it's not added.
+    // If licitacaoData.numeroProcesso is present, we are explicitly not adding it to licitacaoDb.
 
     const licitacaoFields = Object.keys(licitacaoDb);
     const licitacaoPlaceholders = licitacaoFields.map(() => '?').join(', ');
