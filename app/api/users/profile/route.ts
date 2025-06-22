@@ -1,303 +1,178 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase/client";
+import { getDbConnection } from "@/lib/mysql/client"; // MySQL client
 import { verifyJwtToken } from "@/lib/auth/jwt";
+import { v4 as uuidv4 } from "uuid";
+
+// Helper to format the combined profile response
+function formatProfileResponse(user: any, profile: any, preferences: any) {
+  return {
+    id: user.id,
+    name: user.name || "",
+    email: user.email || "",
+    role: user.role || "",
+    avatarUrl: user.avatar_url || "", // Mapped from snake_case
+    bio: profile?.bio || "",
+    phone: profile?.phone || "",
+    position: profile?.address || "", // Using address as position
+    preferences: {
+      emailNotifications: preferences?.email_notifications !== undefined ? Boolean(preferences.email_notifications) : true, // Default true
+      smsNotifications: preferences?.sms_notifications !== undefined ? Boolean(preferences.sms_notifications) : false, // Default false
+      theme: preferences?.theme || "light", // Default light
+    },
+    createdAt: user.created_at,
+    updatedAt: user.updated_at, // Assuming users table has this, or combine from profile/prefs
+  };
+}
 
 // GET - Obter perfil do usuário autenticado
 export async function GET(request: NextRequest) {
+  let connection;
   try {
-    // Verificar autenticação
     let token = request.cookies.get("accessToken")?.value;
     const authHeader = request.headers.get('authorization');
-
     if (!token && authHeader && authHeader.startsWith('Bearer ')) {
-      console.log("Token not found in cookie, attempting to use Authorization header for GET /api/users/profile");
       token = authHeader.split(' ')[1];
     }
-    
     if (!token) {
-      return NextResponse.json(
-        { error: "Não autorizado: token não fornecido" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Não autorizado: token não fornecido" }, { status: 401 });
     }
-    
     const payload = await verifyJwtToken(token);
-    
     if (!payload || !payload.userId) {
-      return NextResponse.json(
-        { error: "Token inválido" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Token inválido" }, { status: 401 });
     }
-    
     const userId = payload.userId;
-    console.log("Buscando perfil para o usuário ID:", userId);
-    
-    // Buscar dados do usuário
-    const { data: user, error: userError } = await supabase
-      .schema('crmonefactory')
-      .from("users")
-      .select("id, name, email, role, avatar_url, created_at, updated_at")
-      .eq("id", userId)
-      .single();
-    
-    if (userError) {
-      console.error("Erro ao buscar usuário:", userError);
-      return NextResponse.json(
-        { error: "Erro ao buscar usuário", details: userError },
-        { status: 500 }
-      );
-    }
-    
-    if (!user) {
-      console.error("Usuário não encontrado com ID:", userId);
-      return NextResponse.json(
-        { error: "Usuário não encontrado" },
-        { status: 404 }
-      );
-    }
-    
-    // Buscar dados do perfil
-    const { data: profile, error: profileError } = await supabase
-      .schema('crmonefactory')
-      .from("user_profiles")
-      .select("bio, phone, address, updated_at")
-      .eq("user_id", userId)
-      .single();
-    
-    if (profileError && profileError.code !== 'PGRST116') { // PGRST116 é "não encontrado"
-      console.error("Erro ao buscar perfil:", profileError);
-    }
-    
-    // Buscar preferências do usuário
-    const { data: preferences, error: prefError } = await supabase
-      .schema('crmonefactory')
-      .from("user_preferences")
-      .select("email_notifications, sms_notifications, theme")
-      .eq("user_id", userId)
-      .single();
-    
-    if (prefError && prefError.code !== 'PGRST116') {
-      console.error("Erro ao buscar preferências:", prefError);
-    }
-    
-    console.log("Dados recuperados:", 
-      "Usuario:", user ? Object.keys(user) : "não encontrado", 
-      "Perfil:", profile ? Object.keys(profile) : "não encontrado",
-      "Preferências:", preferences ? Object.keys(preferences) : "não encontrado"
+
+    connection = await getDbConnection();
+    const [userRows]: any = await connection.execute(
+      "SELECT id, name, email, role, avatar_url, created_at, updated_at FROM users WHERE id = ?",
+      [userId]
     );
-    
-    // Retornar dados combinados
-    return NextResponse.json({
-      id: user.id,
-      name: user.name || "",
-      email: user.email || "",
-      role: user.role || "",
-      avatar: user.avatar_url || "",
-      bio: profile?.bio || "",
-      phone: profile?.phone || "",
-      position: profile?.address || "", // Usando address como position temporariamente
-      preferences: {
-        emailNotifications: preferences?.email_notifications !== false,
-        smsNotifications: preferences?.sms_notifications === true,
-        deadlineAlerts: true, // Valor padrão já que não temos esse campo
-        theme: preferences?.theme || "light"
-      }
-    });
-  } catch (error) {
-    console.error("Erro ao buscar perfil:", error);
-    return NextResponse.json(
-      { error: "Erro interno do servidor" },
-      { status: 500 }
+    if (userRows.length === 0) {
+      return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 });
+    }
+    const user = userRows[0];
+
+    const [profileRows]: any = await connection.execute(
+      "SELECT bio, phone, address FROM user_profiles WHERE user_id = ?",
+      [userId]
     );
+    const profile = profileRows.length > 0 ? profileRows[0] : null;
+
+    const [prefRows]: any = await connection.execute(
+      "SELECT email_notifications, sms_notifications, theme FROM user_preferences WHERE user_id = ?",
+      [userId]
+    );
+    const preferences = prefRows.length > 0 ? prefRows[0] : null;
+
+    return NextResponse.json(formatProfileResponse(user, profile, preferences));
+
+  } catch (error: any) {
+    console.error("Erro ao buscar perfil (MySQL):", error);
+    return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 });
+  } finally {
+    if (connection) await connection.release();
   }
 }
 
 // PUT - Atualizar perfil do usuário
 export async function PUT(request: NextRequest) {
+  let connection;
   try {
-    // Verificar autenticação
     let token = request.cookies.get("accessToken")?.value;
     const authHeader = request.headers.get('authorization');
-
     if (!token && authHeader && authHeader.startsWith('Bearer ')) {
-      console.log("Token not found in cookie, attempting to use Authorization header for PUT /api/users/profile");
       token = authHeader.split(' ')[1];
     }
-    
     if (!token) {
-      return NextResponse.json(
-        { error: "Não autorizado: token não fornecido" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Não autorizado: token não fornecido" }, { status: 401 });
     }
-    
     const payload = await verifyJwtToken(token);
-    
     if (!payload || !payload.userId) {
-      return NextResponse.json(
-        { error: "Token inválido" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Token inválido" }, { status: 401 });
     }
-    
     const userId = payload.userId;
     const body = await request.json();
-    console.log("Atualizando perfil para usuário ID:", userId, "Dados:", Object.keys(body));
-    
-    // Preparar atualizações para cada tabela
-    const userUpdates: Record<string, any> = {};
-    const profileUpdates: Record<string, any> = {};
-    const prefUpdates: Record<string, any> = {};
-    
-    // Mapear campos para as tabelas correspondentes
+
+    connection = await getDbConnection();
+    await connection.beginTransaction();
+
+    // Update users table
+    const userUpdates: { [key: string]: any } = {};
     if (body.name !== undefined) userUpdates.name = body.name;
-    if (body.email !== undefined) userUpdates.email = body.email;
-    
+    if (body.avatarUrl !== undefined) userUpdates.avatar_url = body.avatarUrl; // Map from camelCase
+    // Email change might require verification, handle with care or separate endpoint
+    // Role change should be admin restricted (already handled in [id]/route.ts, consider if needed here)
+
+    if (Object.keys(userUpdates).length > 0) {
+      const userFields = Object.keys(userUpdates).map(key => `${key} = ?`).join(', ');
+      const userValues = Object.values(userUpdates);
+      userValues.push(userId);
+      await connection.execute(`UPDATE users SET ${userFields}, updated_at = NOW() WHERE id = ?`, userValues);
+    }
+
+    // Update/Insert user_profiles table
+    const profileUpdates: { [key: string]: any } = {};
     if (body.bio !== undefined) profileUpdates.bio = body.bio;
     if (body.phone !== undefined) profileUpdates.phone = body.phone;
-    if (body.position !== undefined) profileUpdates.address = body.position; // Usando address como position
-    
-    // Mapear preferências
-    if (body.preferences) {
-      if (body.preferences.emailNotifications !== undefined) 
-        prefUpdates.email_notifications = body.preferences.emailNotifications;
-      if (body.preferences.smsNotifications !== undefined) 
-        prefUpdates.sms_notifications = body.preferences.smsNotifications;
-      if (body.preferences.theme !== undefined) 
-        prefUpdates.theme = body.preferences.theme;
-    }
-    
-    // Verificar se email já está em uso por outro usuário
-    if (body.email) {
-      const { data: existingUser } = await supabase
-        .schema('crmonefactory')
-        .from("users")
-        .select("id")
-        .eq("email", body.email)
-        .neq("id", userId)
-        .single();
-      
-      if (existingUser) {
-        return NextResponse.json(
-          { error: "Este email já está em uso por outro usuário" },
-          { status: 400 }
-        );
-      }
-    }
-    
-    // Realizar as atualizações em paralelo
-    const updates = [];
-    
-    // Atualizar dados básicos do usuário
-    if (Object.keys(userUpdates).length > 0) {
-      console.log("Atualizando usuário:", userUpdates);
-      userUpdates.updated_at = new Date().toISOString();
-      
-      updates.push(
-        supabase
-          .schema('crmonefactory')
-          .from("users")
-          .update(userUpdates)
-          .eq("id", userId)
-      );
-    }
-    
-    // Atualizar perfil
+    if (body.position !== undefined) profileUpdates.address = body.position; // Using address for position
+
     if (Object.keys(profileUpdates).length > 0) {
-      console.log("Atualizando perfil:", profileUpdates);
-      profileUpdates.updated_at = new Date().toISOString();
-      
-      // Verificar se o perfil já existe
-      const { data: existingProfile } = await supabase
-        .schema('crmonefactory')
-        .from("user_profiles")
-        .select("id")
-        .eq("user_id", userId)
-        .single();
-      
-      if (existingProfile) {
-        updates.push(
-          supabase
-            .schema('crmonefactory')
-            .from("user_profiles")
-            .update(profileUpdates)
-            .eq("user_id", userId)
-        );
+      const [existingProfile]: any = await connection.execute("SELECT id FROM user_profiles WHERE user_id = ?", [userId]);
+      if (existingProfile.length > 0) {
+        const profileFields = Object.keys(profileUpdates).map(key => `${key} = ?`).join(', ');
+        const profileValues = Object.values(profileUpdates);
+        profileValues.push(userId);
+        await connection.execute(`UPDATE user_profiles SET ${profileFields}, updated_at = NOW() WHERE user_id = ?`, profileValues);
       } else {
-        updates.push(
-          supabase
-            .schema('crmonefactory')
-            .from("user_profiles")
-            .insert({
-              user_id: userId,
-              ...profileUpdates,
-              created_at: new Date().toISOString()
-            })
-        );
+        const newProfileId = uuidv4();
+        profileUpdates.id = newProfileId;
+        profileUpdates.user_id = userId;
+        const profileFields = Object.keys(profileUpdates);
+        const profilePlaceholders = profileFields.map(() => '?').join(', ');
+        const profileValues = Object.values(profileUpdates);
+        await connection.execute(`INSERT INTO user_profiles (${profileFields.join(', ')}, created_at, updated_at) VALUES (${profilePlaceholders}, NOW(), NOW())`, profileValues);
       }
     }
     
-    // Atualizar preferências
-    if (Object.keys(prefUpdates).length > 0) {
-      console.log("Atualizando preferências:", prefUpdates);
-      prefUpdates.updated_at = new Date().toISOString();
-      
-      // Verificar se as preferências já existem
-      const { data: existingPrefs } = await supabase
-        .schema('crmonefactory')
-        .from("user_preferences")
-        .select("id")
-        .eq("user_id", userId)
-        .single();
-      
-      if (existingPrefs) {
-        updates.push(
-          supabase
-            .schema('crmonefactory')
-            .from("user_preferences")
-            .update(prefUpdates)
-            .eq("user_id", userId)
-        );
-      } else {
-        updates.push(
-          supabase
-            .schema('crmonefactory')
-            .from("user_preferences")
-            .insert({
-              user_id: userId,
-              ...prefUpdates,
-              created_at: new Date().toISOString()
-            })
-        );
-      }
-    }
-    
-    // Executar todas as atualizações
-    if (updates.length > 0) {
-      const results = await Promise.all(updates);
-      
-      // Verificar se houve algum erro
-      for (const result of results) {
-        if (result.error) {
-          console.error("Erro ao atualizar:", result.error);
-          return NextResponse.json(
-            { error: "Erro ao atualizar dados do perfil", details: result.error },
-            { status: 500 }
-          );
+    // Update/Insert user_preferences table
+    if (body.preferences) {
+      const prefUpdates: { [key: string]: any } = {};
+      if (body.preferences.emailNotifications !== undefined) prefUpdates.email_notifications = Boolean(body.preferences.emailNotifications);
+      if (body.preferences.smsNotifications !== undefined) prefUpdates.sms_notifications = Boolean(body.preferences.smsNotifications);
+      if (body.preferences.theme !== undefined) prefUpdates.theme = body.preferences.theme;
+
+      if (Object.keys(prefUpdates).length > 0) {
+        const [existingPrefs]: any = await connection.execute("SELECT id FROM user_preferences WHERE user_id = ?", [userId]);
+        if (existingPrefs.length > 0) {
+          const prefFields = Object.keys(prefUpdates).map(key => `${key} = ?`).join(', ');
+          const prefValues = Object.values(prefUpdates);
+          prefValues.push(userId);
+          await connection.execute(`UPDATE user_preferences SET ${prefFields}, updated_at = NOW() WHERE user_id = ?`, prefValues);
+        } else {
+          const newPrefsId = uuidv4();
+          prefUpdates.id = newPrefsId;
+          prefUpdates.user_id = userId;
+           // Set defaults if not provided in body.preferences
+          if (prefUpdates.email_notifications === undefined) prefUpdates.email_notifications = true;
+          if (prefUpdates.sms_notifications === undefined) prefUpdates.sms_notifications = false;
+          if (prefUpdates.theme === undefined) prefUpdates.theme = "light";
+
+          const prefFields = Object.keys(prefUpdates);
+          const prefPlaceholders = prefFields.map(() => '?').join(', ');
+          const prefValues = Object.values(prefUpdates);
+          await connection.execute(`INSERT INTO user_preferences (${prefFields.join(', ')}, created_at, updated_at) VALUES (${prefPlaceholders}, NOW(), NOW())`, prefValues);
         }
       }
     }
-    
-    return NextResponse.json({
-      message: "Perfil atualizado com sucesso"
-    });
+
+    await connection.commit();
+    return NextResponse.json({ message: "Perfil atualizado com sucesso" });
+
   } catch (error: any) {
-    console.error("Erro ao atualizar perfil:", error);
-    console.error("Stack trace:", error.stack);
-    return NextResponse.json(
-      { error: "Erro interno do servidor" },
-      { status: 500 }
-    );
+    console.error("Erro ao atualizar perfil (MySQL):", error);
+    if (connection) await connection.rollback();
+    return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 });
+  } finally {
+    if (connection) await connection.release();
   }
 }

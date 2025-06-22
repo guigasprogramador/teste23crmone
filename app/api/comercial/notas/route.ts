@@ -1,7 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
-// import { Nota } from '@/types/comercial'; // A interface Nota pode precisar ser atualizada
 import { getDbConnection } from '@/lib/mysql/client';
 import { v4 as uuidv4 } from 'uuid';
+
+// Helper to format date string to YYYY-MM-DD
+function parseToYYYYMMDD(dateString: string | undefined | null): string | null {
+  if (!dateString) return null;
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) { // Invalid date
+      // Try parsing DD/MM/YYYY
+      const parts = dateString.split('/');
+      if (parts.length === 3) {
+        const [day, month, year] = parts;
+        if (day.length === 2 && month.length === 2 && year.length === 4) {
+          return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+        }
+      }
+      return null;
+    }
+    return date.toISOString().split('T')[0];
+  } catch (e) {
+    return null;
+  }
+}
+
+// Helper to map database row (snake_case) to API response (camelCase)
+function formatNotaResponse(dbRow: any, autorName?: string): any {
+  if (!dbRow) return null;
+  return {
+    id: dbRow.id,
+    oportunidadeId: dbRow.oportunidade_id,
+    autorId: dbRow.autor_id,
+    autor: autorName || null, // Populate if autorName is provided
+    texto: dbRow.texto,
+    data: dbRow.data ? new Date(dbRow.data).toISOString().split('T')[0] : null, // Ensure YYYY-MM-DD format if not null
+    tipo: dbRow.tipo,
+    createdAt: dbRow.created_at,
+    updatedAt: dbRow.updated_at,
+  };
+}
 
 // GET - Listar todas as notas ou filtrar por oportunidade
 export async function GET(request: NextRequest) {
@@ -13,15 +50,18 @@ export async function GET(request: NextRequest) {
     
     connection = await getDbConnection();
     
+    // Schema columns: id, oportunidade_id, autor_id, texto, data, tipo, created_at, updated_at
     let sql = `
       SELECT
         n.id,
-        n.oportunidade_id AS oportunidadeId,
+        n.oportunidade_id,
+        n.autor_id,
         n.texto,
+        n.data,
         n.tipo,
-        n.created_at AS data,
-        u.name AS autor,
-        n.autor_id AS autorId
+        n.created_at,
+        n.updated_at,
+        u.name AS autor_nome
       FROM notas n
       LEFT JOIN users u ON n.autor_id = u.id
     `;
@@ -37,7 +77,8 @@ export async function GET(request: NextRequest) {
     console.log("Executando SQL:", sql, params);
     const [rows] = await connection.execute(sql, params);
 
-    return NextResponse.json(rows);
+    const notasFormatadas = (rows as any[]).map(row => formatNotaResponse(row, row.autor_nome));
+    return NextResponse.json(notasFormatadas);
 
   } catch (error: any) {
     console.error('Erro ao buscar notas (MySQL):', error);
@@ -62,14 +103,10 @@ export async function POST(request: NextRequest) {
   let connection;
   console.log("POST /api/comercial/notas - Iniciando criação com MySQL");
   try {
-    const data = await request.json();
-    console.log("Dados recebidos:", data);
+    const body = await request.json(); // Expects camelCase: oportunidadeId, autorId, texto, data, tipo
+    console.log("Dados recebidos:", body);
     
-    // Validação básica
-    // O campo 'autor' (nome do autor) não é mais obrigatório no corpo, pois será buscado pelo autorId.
-    // autorId é o ID do usuário logado, que deve ser obtido do token de autenticação no futuro.
-    // Por enquanto, para esta refatoração, esperamos autorId no corpo da requisição.
-    if (!data.oportunidadeId || !data.texto || !data.autorId) {
+    if (!body.oportunidadeId || !body.texto || !body.autorId) {
       return NextResponse.json(
         { error: 'ID da oportunidade, ID do autor e texto são obrigatórios' },
         { status: 400 }
@@ -77,34 +114,52 @@ export async function POST(request: NextRequest) {
     }
     
     const newNotaId = uuidv4();
-    // O tipo é opcional, o DB tem default 'geral'
-    const tipo = data.tipo || 'geral';
 
-    const novaNotaDB = {
+    // Schema columns: id, oportunidade_id, autor_id, texto, data, tipo, created_at, updated_at
+    const novaNotaDB: {[key: string]: any} = {
       id: newNotaId,
-      oportunidade_id: data.oportunidadeId,
-      autor_id: data.autorId, // Este deve ser o UUID do usuário logado
-      texto: data.texto,
-      tipo: tipo,
-      // created_at e updated_at serão definidos por NOW() no SQL
+      oportunidade_id: body.oportunidadeId,
+      autor_id: body.autorId,
+      texto: body.texto,
+      tipo: body.tipo || 'geral', // Default tipo
     };
+
+    // Handle 'data' field from schema
+    if (body.data) {
+      const parsedDate = parseToYYYYMMDD(body.data);
+      if (parsedDate) {
+        novaNotaDB.data = parsedDate;
+      } else {
+        // Optional: return error if date format is invalid, or just proceed with null/default
+        console.warn("Formato de data inválido recebido:", body.data);
+        novaNotaDB.data = null;
+      }
+    } else {
+      novaNotaDB.data = null; // Or set a default date like NOW() if schema allows/requires
+    }
     
     connection = await getDbConnection();
-    const sqlInsert = 'INSERT INTO notas (id, oportunidade_id, autor_id, texto, tipo, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())';
-    await connection.execute(sqlInsert, Object.values(novaNotaDB));
+
+    const fields = Object.keys(novaNotaDB);
+    const placeholders = fields.map(() => '?').join(', ');
+    const values = Object.values(novaNotaDB);
+
+    const sqlInsert = `INSERT INTO notas (${fields.join(', ')}, created_at, updated_at) VALUES (${placeholders}, NOW(), NOW())`;
+    await connection.execute(sqlInsert, values);
 
     console.log("Nova nota criada com ID:", newNotaId);
 
-    // Para retornar o objeto completo incluindo o nome do autor e o timestamp gerado pelo DB:
     const sqlSelectNew = `
       SELECT
         n.id,
-        n.oportunidade_id AS oportunidadeId,
+        n.oportunidade_id,
+        n.autor_id,
         n.texto,
+        n.data,
         n.tipo,
-        n.created_at AS data,
-        u.name AS autor,
-        n.autor_id AS autorId
+        n.created_at,
+        n.updated_at,
+        u.name AS autor_nome
       FROM notas n
       LEFT JOIN users u ON n.autor_id = u.id
       WHERE n.id = ?
@@ -112,17 +167,29 @@ export async function POST(request: NextRequest) {
     const [createdRows]: any = await connection.execute(sqlSelectNew, [newNotaId]);
 
     if (createdRows.length === 0) {
-        // Isso seria inesperado
         return NextResponse.json({ error: "Falha ao recuperar nota recém-criada" }, { status: 500 });
     }
     
-    return NextResponse.json(createdRows[0], { status: 201 });
+    return NextResponse.json(formatNotaResponse(createdRows[0], createdRows[0].autor_nome), { status: 201 });
 
   } catch (error: any) {
     console.error('Erro ao criar nota (MySQL):', error);
+    // Handle specific errors like foreign key violation if autor_id or oportunidade_id is invalid
+    if (error.code === 'ER_NO_REFERENCED_ROW_2') {
+        return NextResponse.json({ error: 'ID da oportunidade ou ID do autor inválido.' }, { status: 400 });
+    }
     return NextResponse.json(
-      { error: 'Erro ao criar nota' },
+      { error: 'Erro ao criar nota', details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (connection) {
+        try {
+            await connection.release();
+            console.log("Conexão MySQL liberada (POST Notas).");
+        } catch (releaseError: any) {
+            console.error("Erro ao liberar conexão MySQL (POST Notas):", releaseError.message);
+        }
+    }
   }
 }

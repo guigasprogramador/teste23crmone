@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
     const descricao = formData.get('descricao') as string | null;
     const numeroDocumento = formData.get('numeroDocumento') as string | null;
     let dataValidade = formData.get('dataValidade') as string | null; // Expects YYYY-MM-DD
-    const categoriaLegado = formData.get('categoriaLegado') as string | null; // Legacy field
+    const categoriaForm = formData.get('categoria') as string | null; // Changed from categoriaLegado, and from formData
     const tagsString = formData.get('tags') as string | null; // Expects comma-separated string e.g., "tag1,tag2"
 
     if (!tipo) {
@@ -136,13 +136,13 @@ export async function POST(request: NextRequest) {
       descricao: descricao || null,
       numero_documento: numeroDocumento || null,
       data_validade: dataValidade ? new Date(dataValidade) : null,
-      categoria_legado: categoriaLegado || null,
+      categoria: categoriaForm || null, // Changed key to categoria
       // data_criacao and data_atualizacao will use default MySQL CURRENT_TIMESTAMP
     };
 
     await connection.execute(
-      `INSERT INTO documentos (id, nome, tipo, licitacao_id, criado_por, arquivo_path, url_documento, formato, tamanho, status, descricao, numero_documento, data_validade, categoria_legado)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO documentos (id, nome, tipo, licitacao_id, criado_por, arquivo_path, url_documento, formato, tamanho, status, descricao, numero_documento, data_validade, categoria)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, // Changed column to categoria
       [
         documentoDb.id,
         documentoDb.nome,
@@ -157,7 +157,7 @@ export async function POST(request: NextRequest) {
         documentoDb.descricao,
         documentoDb.numero_documento,
         documentoDb.data_validade,
-        documentoDb.categoria_legado,
+        documentoDb.categoria, // Changed to use categoria
       ]
     );
 

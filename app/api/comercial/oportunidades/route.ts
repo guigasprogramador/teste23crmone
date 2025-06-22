@@ -268,16 +268,17 @@ export async function POST(request: NextRequest) {
       hora_reuniao: data.horaReuniao || null, // hh:mm:ss
       probabilidade: data.probabilidade || 50,
       posicao_kanban: data.posicaoKanban || 0,
+      motivo_perda: data.motivoPerda || null, // Added motivo_perda
       // created_at e updated_at serão definidos como NOW() na query
     };
 
     console.log('Inserindo oportunidade no MySQL:', oportunidadeDB);
     await connection.execute(
-      'INSERT INTO oportunidades (id, titulo, cliente_id, valor, responsavel_id, prazo, status, descricao, tipo, tipo_faturamento, data_reuniao, hora_reuniao, probabilidade, posicao_kanban, data_criacao, data_atualizacao, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), NOW())',
+      'INSERT INTO oportunidades (id, titulo, cliente_id, valor, responsavel_id, prazo, status, descricao, tipo, tipo_faturamento, data_reuniao, hora_reuniao, probabilidade, posicao_kanban, motivo_perda, data_criacao, data_atualizacao, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW(), NOW())',
       [
         oportunidadeDB.id, oportunidadeDB.titulo, oportunidadeDB.cliente_id, oportunidadeDB.valor, oportunidadeDB.responsavel_id,
         oportunidadeDB.prazo, oportunidadeDB.status, oportunidadeDB.descricao, oportunidadeDB.tipo, oportunidadeDB.tipo_faturamento,
-        oportunidadeDB.data_reuniao, oportunidadeDB.hora_reuniao, oportunidadeDB.probabilidade, oportunidadeDB.posicao_kanban
+        oportunidadeDB.data_reuniao, oportunidadeDB.hora_reuniao, oportunidadeDB.probabilidade, oportunidadeDB.posicao_kanban, oportunidadeDB.motivo_perda // Added motivo_perda
       ]
     );
 
