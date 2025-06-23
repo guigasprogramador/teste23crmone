@@ -1,7 +1,6 @@
 "use client"
 
-import React, { useState, useRef } from "react"
-
+import React, { useState, useRef, useEffect } from "react" // Added useEffect
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -22,9 +21,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { format } from "date-fns"
 import { ptBR } from "date-fns/locale"
 import { cn } from "@/lib/utils"
-import { Plus, CalendarIcon, Save, Mail, FileText } from "lucide-react"
+import { Plus, CalendarIcon, Save, Mail, FileText, Loader2 } from "lucide-react" // Added Loader2
 import { SeletorDocumentosComercial } from "@/components/comercial/seletor-documentos-comercial"
-import { DocumentType } from "@/hooks/useDocuments"
+import { DocumentType } from "@/hooks/useDocuments" // Assuming DocumentType is suitable for here too
+// import { useOportunidades } from "@/hooks/comercial/use-oportunidades"; // For fetching existing responsaveis if needed
 
 interface NovaOportunidadeProps {
   onOportunidadeAdded?: (oportunidade: any) => void
@@ -35,9 +35,7 @@ export function NovaOportunidade({ onOportunidadeAdded }: NovaOportunidadeProps)
   const [activeTab, setActiveTab] = useState("cliente")
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Estados para os campos do formulário
-  const [formData, setFormData] = useState({
-    // Dados do cliente
+  const initialFormData = {
     nomeCliente: "",
     cnpj: "",
     contatoNome: "",
@@ -45,50 +43,41 @@ export function NovaOportunidade({ onOportunidadeAdded }: NovaOportunidadeProps)
     contatoEmail: "",
     endereco: "",
     segmento: "",
-
-    // Dados da oportunidade
     titulo: "",
     descricao: "",
     valor: "",
     status: "novo_lead",
-    prazo: "",
-    tipo: "", // Produto ou Serviço
-    tipoFaturamento: "", // Direto ou Distribuidor (apenas para Produto)
-  })
+    prazo: "", // Storing as yyyy-MM-dd string
+    tipo: "",
+    tipoFaturamento: "",
+    responsavelId: "",
+  };
 
-  // Estado para data de reunião
+  const [formData, setFormData] = useState(initialFormData)
   const [dataReuniao, setDataReuniao] = useState<Date | undefined>()
   const [horaReuniao, setHoraReuniao] = useState("")
 
-  // Estado para responsáveis
-  const [responsaveis, setResponsaveis] = useState([
-    { id: "resp1", nome: "Ana Silva", selecionado: false },
-    { id: "resp2", nome: "Carlos Oliveira", selecionado: false },
-    { id: "resp3", nome: "Pedro Santos", selecionado: false },
-    { id: "resp4", nome: "Maria Souza", selecionado: false },
-  ])
+  // Example responsible users - in a real app, fetch these
+  const [listaResponsaveis, setListaResponsaveis] = useState([
+    { id: "user-uuid-1", nome: "Ana Silva" },
+    { id: "user-uuid-2", nome: "Carlos Oliveira" },
+    // Add more or fetch from API
+  ]);
+  const [selectedResponsavelId, setSelectedResponsavelId] = useState<string | undefined>();
 
-  // Estado para criar evento no calendário
   const [criarEvento, setCriarEvento] = useState(true)
   const [enviarNotificacoes, setEnviarNotificacoes] = useState(true)
-
-  // Estado para documentos selecionados do repositório
   const [documentosRepositorio, setDocumentosRepositorio] = useState<DocumentType[]>([])
-
-  // Estado para documentos necessários (checklist)
   const [documentosNecessarios, setDocumentosNecessarios] = useState([
     { id: "doc1", nome: "Proposta Comercial", selecionado: false },
     { id: "doc2", nome: "Contrato de Serviço", selecionado: false },
-    { id: "doc3", nome: "Ficha Cadastral", selecionado: false },
-    { id: "doc4", nome: "Termo de Confidencialidade", selecionado: false },
-    { id: "doc5", nome: "Carta de Apresentação", selecionado: false },
   ])
-
-  // Estado para arquivos anexados
   const [arquivosAnexados, setArquivosAnexados] = useState<File[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Funções de manipulação de formulário
+  const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
+  const [attachmentUploadProgress, setAttachmentUploadProgress] = useState(0);
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target
     setFormData((prev) => ({ ...prev, [name]: value }))
@@ -98,18 +87,21 @@ export function NovaOportunidade({ onOportunidadeAdded }: NovaOportunidadeProps)
     setFormData((prev) => ({ ...prev, [name]: value }))
   }
 
-  const handleResponsavelChange = (id: string, checked: boolean) => {
-    setResponsaveis(responsaveis.map((resp) => (resp.id === id ? { ...resp, selecionado: checked } : resp)))
-  }
+  const handleDateSelectChange = (name: string, date: Date | undefined) => {
+    setFormData((prev) => ({ ...prev, [name]: date ? format(date, "yyyy-MM-dd") : "" }));
+  };
 
-  // Função para marcar documentos necessários no checklist
+  const handleResponsavelSelectChange = (responsavelId: string) => {
+    setSelectedResponsavelId(responsavelId);
+    setFormData(prev => ({ ...prev, responsavelId: responsavelId }));
+  };
+
   const handleDocumentoChange = (id: string, checked: boolean) => {
     setDocumentosNecessarios(
       documentosNecessarios.map((doc) => (doc.id === id ? { ...doc, selecionado: checked } : doc))
     )
   }
 
-  // Manipular seleção de arquivos
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) {
       const novoArquivos = Array.from(e.target.files)
@@ -117,148 +109,158 @@ export function NovaOportunidade({ onOportunidadeAdded }: NovaOportunidadeProps)
     }
   }
 
-  // Abrir diálogo de seleção de arquivos
   const handleEscolherArquivos = () => {
     fileInputRef.current?.click()
   }
 
-  // Remover arquivo da lista
   const handleRemoverArquivo = (index: number) => {
     setArquivosAnexados(prev => prev.filter((_, i) => i !== index))
   }
 
-  const validateForm = () => {
-    // Validar campos obrigatórios com base na aba ativa
-    if (activeTab === "cliente") {
-      return (
-        formData.nomeCliente &&
-        formData.cnpj &&
-        formData.contatoNome &&
-        formData.contatoEmail &&
-        formData.segmento
-      )
-    } else if (activeTab === "oportunidade") {
-      const tipoValid = formData.tipo && (formData.tipo === "servico" || (formData.tipo === "produto" && formData.tipoFaturamento))
-      return formData.titulo && formData.status && tipoValid
-    } else if (activeTab === "documentos") {
-      return true // Não há campos obrigatórios na aba de documentos
-    } else if (activeTab === "reuniao") {
-      return true // Não há campos obrigatórios na aba de reunião
+  const validateFormForTab = (tab: string) => {
+    if (tab === "cliente") {
+      return formData.nomeCliente && formData.cnpj && formData.contatoNome && formData.contatoEmail && formData.segmento;
+    } else if (tab === "oportunidade") {
+      const tipoValid = formData.tipo && (formData.tipo === "servico" || (formData.tipo === "produto" && formData.tipoFaturamento));
+      return formData.titulo && formData.status && tipoValid && selectedResponsavelId;
     }
-    return false
+    return true; // No validation for other tabs by default for next tab action
   }
 
   const handleNextTab = () => {
-    if (!validateForm()) {
-      alert("Por favor, preencha todos os campos obrigatórios.")
-      return
+    if (!validateFormForTab(activeTab)) {
+      alert("Por favor, preencha todos os campos obrigatórios da aba atual antes de prosseguir.");
+      return;
     }
-
-    if (activeTab === "cliente") {
-      setActiveTab("oportunidade")
-    } else if (activeTab === "oportunidade") {
-      setActiveTab("documentos")
-    } else if (activeTab === "documentos") {
-      setActiveTab("reuniao")
-    }
+    if (activeTab === "cliente") setActiveTab("oportunidade");
+    else if (activeTab === "oportunidade") setActiveTab("documentos");
+    else if (activeTab === "documentos") setActiveTab("reuniao");
   }
 
   const handlePrevTab = () => {
-    if (activeTab === "oportunidade") {
-      setActiveTab("cliente")
-    } else if (activeTab === "documentos") {
-      setActiveTab("oportunidade")
-    } else if (activeTab === "reuniao") {
-      setActiveTab("documentos")
-    }
+    if (activeTab === "oportunidade") setActiveTab("cliente");
+    else if (activeTab === "documentos") setActiveTab("oportunidade");
+    else if (activeTab === "reuniao") setActiveTab("documentos");
   }
 
-  const handleSubmit = () => {
-    if (!validateForm()) {
-      alert("Por favor, preencha todos os campos obrigatórios.")
-      return
+  const uploadAnexosOportunidade = async (oportunidadeId: string, arquivos: File[]): Promise<void> => {
+    if (arquivos.length === 0) return;
+
+    setIsUploadingAttachments(true);
+    setAttachmentUploadProgress(0);
+    let filesProcessed = 0;
+
+    for (const arquivo of arquivos) {
+      const formDataUpload = new FormData();
+      formDataUpload.append('file', arquivo);
+      formDataUpload.append('nome', arquivo.name);
+      formDataUpload.append('tipo', 'Anexo Oportunidade');
+      formDataUpload.append('tags', 'comercial');
+      // Not appending 'oportunidadeId' to this specific document upload as per earlier decision.
+      // If direct linking is desired, the backend /api/documentos/doc/upload and 'documentos' table
+      // would need to support an 'oportunidade_id' or a generic 'parent_entity_id'.
+
+      try {
+        const response = await fetch('/api/documentos/doc/upload', {
+          method: 'POST',
+          credentials: 'include',
+          body: formDataUpload,
+        });
+
+        if (!response.ok) {
+          const errorData = await response.text();
+          console.error(`Erro ao fazer upload de ${arquivo.name}: ${errorData}`);
+          // Optionally, collect errors to show to user later
+        } else {
+          console.log(`Arquivo ${arquivo.name} enviado com sucesso.`);
+        }
+      } catch (error) {
+        console.error(`Exceção ao fazer upload de ${arquivo.name}:`, error);
+      }
+      filesProcessed++;
+      setAttachmentUploadProgress(Math.round((filesProcessed / arquivos.length) * 100));
+    }
+    setIsUploadingAttachments(false);
+  };
+
+  const handleSubmit = async () => {
+    // Final validation before submitting
+    if (!formData.nomeCliente || !formData.cnpj || !formData.contatoNome || !formData.contatoEmail || !formData.segmento ||
+        !formData.titulo || !formData.status || !formData.tipo ||
+        (formData.tipo === "produto" && !formData.tipoFaturamento) || !selectedResponsavelId) {
+      alert("Por favor, preencha todos os campos obrigatórios em todas as abas antes de salvar.");
+      // Optionally, navigate to the first tab with missing required fields
+      setActiveTab("cliente"); // Example: direct to first tab
+      return;
     }
 
-    setIsSubmitting(true)
+    setIsSubmitting(true);
 
-    // Criar objeto de oportunidade
-    const novaOportunidade = {
-      id: `opp-${Date.now()}`,
-      titulo: formData.titulo || `Oportunidade - ${formData.nomeCliente}`,
-      cliente: formData.nomeCliente,
-      valor: formData.valor ? `R$ ${formData.valor}` : "A definir",
-      responsavel: responsaveis.find((r) => r.selecionado)?.nome || "Não atribuído",
-      prazo: dataReuniao ? format(dataReuniao, "dd/MM/yyyy", { locale: ptBR }) : formData.prazo || "Não definido",
-      status: formData.status,
-      // Dados adicionais
+    const oportunidadePayload = {
+      cliente: {
+          nome: formData.nomeCliente,
+          cnpj: formData.cnpj,
+          contatoNome: formData.contatoNome,
+          contatoTelefone: formData.contatoTelefone,
+          contatoEmail: formData.contatoEmail,
+          endereco: formData.endereco,
+          segmento: formData.segmento,
+      },
+      titulo: formData.titulo,
       descricao: formData.descricao,
-      cnpj: formData.cnpj,
-      contatoNome: formData.contatoNome,
-      contatoTelefone: formData.contatoTelefone,
-      contatoEmail: formData.contatoEmail,
-      endereco: formData.endereco,
-      segmento: formData.segmento,
-      dataReuniao: dataReuniao ? format(dataReuniao, "dd/MM/yyyy", { locale: ptBR }) : "",
-      horaReuniao: horaReuniao,
-      responsaveisIds: responsaveis.filter((r) => r.selecionado).map((r) => r.id),
-      criarEvento,
-      enviarNotificacoes,
+      valor: formData.valor ? parseFloat(formData.valor.replace(/\./g, "").replace(",", ".")) : null,
+      status: formData.status,
+      prazo: formData.prazo || null, // Already yyyy-MM-dd
       tipo: formData.tipo,
-      tipoFaturamento: formData.tipoFaturamento,
-    }
+      tipoFaturamento: formData.tipo === "produto" ? formData.tipoFaturamento : null,
+      responsavelId: selectedResponsavelId,
+      dataReuniao: dataReuniao ? format(dataReuniao, "yyyy-MM-dd") : null,
+      horaReuniao: horaReuniao || null,
+      // documentosRepositorioIds: documentosRepositorio.map(doc => doc.id), // If API supports this
+    };
 
-    // Simular envio para API
-    setTimeout(() => {
-      setIsSubmitting(false)
+    try {
+      const response = await fetch('/api/comercial/oportunidades', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(oportunidadePayload),
+      });
 
-      // Notificar componente pai
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: "Erro desconhecido ao criar oportunidade." }));
+        throw new Error(errorData.error || `Erro HTTP ${response.status}`);
+      }
+
+      const newOportunidade = await response.json();
+      console.log("Oportunidade criada:", newOportunidade);
+
+      if (newOportunidade && newOportunidade.id && arquivosAnexados.length > 0) {
+        await uploadAnexosOportunidade(newOportunidade.id, arquivosAnexados);
+      }
+
       if (onOportunidadeAdded) {
-        onOportunidadeAdded(novaOportunidade)
+        onOportunidadeAdded(newOportunidade);
       }
 
-      // Criar evento no calendário (simulação)
-      if (criarEvento && dataReuniao) {
-        console.log(
-          `Evento criado no calendário para ${format(dataReuniao, "dd/MM/yyyy", { locale: ptBR })} às ${horaReuniao}`,
-        )
-      }
+      setFormData(initialFormData);
+      setDataReuniao(undefined);
+      setHoraReuniao("");
+      setSelectedResponsavelId(undefined);
+      setArquivosAnexados([]);
+      setDocumentosRepositorio([]);
+      setDocumentosNecessarios(documentosNecessarios.map(d => ({...d, selecionado: false})));
+      setActiveTab("cliente");
+      setOpen(false);
 
-      // Enviar notificações (simulação)
-      if (enviarNotificacoes) {
-        const responsaveisSelecionados = responsaveis.filter((r) => r.selecionado)
-        console.log(
-          `Notificações enviadas para ${responsaveisSelecionados.length} responsáveis e para o cliente ${formData.contatoEmail}`,
-        )
-      }
+    } catch (error) {
+      console.error("Erro ao criar oportunidade:", error);
+      alert(`Falha ao criar oportunidade: ${error instanceof Error ? error.message : "Erro desconhecido"}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
-      // Resetar formulário
-      setFormData({
-        nomeCliente: "",
-        cnpj: "",
-        contatoNome: "",
-        contatoTelefone: "",
-        contatoEmail: "",
-        endereco: "",
-        segmento: "",
-        titulo: "",
-        descricao: "",
-        valor: "",
-        status: "novo_lead",
-        prazo: "",
-        tipo: "",
-        tipoFaturamento: "",
-      })
-      setDataReuniao(undefined)
-      setHoraReuniao("")
-      setResponsaveis(responsaveis.map((resp) => ({ ...resp, selecionado: false })))
-      setCriarEvento(true)
-      setEnviarNotificacoes(true)
-      setActiveTab("cliente")
-
-      // Fechar o diálogo
-      setOpen(false)
-    }, 1500)
-  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -422,6 +424,19 @@ export function NovaOportunidade({ onOportunidadeAdded }: NovaOportunidadeProps)
               />
             </div>
 
+            <div className="space-y-2">
+                <Label htmlFor="responsavelId">Responsável <span className="text-red-500">*</span></Label>
+                <Select value={selectedResponsavelId} onValueChange={handleResponsavelSelectChange}>
+                    <SelectTrigger>
+                        <SelectValue placeholder="Selecione um responsável" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {listaResponsaveis.map(r => <SelectItem key={r.id} value={r.id}>{r.nome}</SelectItem>)}
+                    </SelectContent>
+                </Select>
+            </div>
+
+
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="valor">Valor da Oportunidade (R$)</Label>
@@ -435,13 +450,28 @@ export function NovaOportunidade({ onOportunidadeAdded }: NovaOportunidadeProps)
               </div>
               <div className="space-y-2">
                 <Label htmlFor="prazo">Prazo Estimado</Label>
-                <Input
-                  id="prazo"
-                  name="prazo"
-                  placeholder="Ex: 30 dias"
-                  value={formData.prazo}
-                  onChange={handleInputChange}
-                />
+                 <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          "w-full justify-start text-left font-normal",
+                          !formData.prazo && "text-muted-foreground",
+                        )}
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {formData.prazo ? format(new Date(formData.prazo), "PPP", { locale: ptBR }) : "Selecione uma data"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0">
+                      <Calendar
+                        mode="single"
+                        selected={formData.prazo ? new Date(formData.prazo) : undefined}
+                        onSelect={(date) => handleDateSelectChange("prazo", date)}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
               </div>
             </div>
 
@@ -561,7 +591,15 @@ export function NovaOportunidade({ onOportunidadeAdded }: NovaOportunidadeProps)
                       {arquivosAnexados.length ? `${arquivosAnexados.length} arquivo(s) selecionado(s)` : "Nenhum arquivo escolhido"}
                     </span>
                   </div>
-                  {arquivosAnexados.length > 0 && (
+                  {isUploadingAttachments && (
+                    <div className="mt-2">
+                        <Label>Progresso do Upload: {attachmentUploadProgress}%</Label>
+                        <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
+                            <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${attachmentUploadProgress}%` }}></div>
+                        </div>
+                    </div>
+                  )}
+                  {arquivosAnexados.length > 0 && !isUploadingAttachments && (
                     <div className="mt-2 space-y-1">
                       {arquivosAnexados.map((arquivo, index) => (
                         <div key={index} className="flex items-center text-sm">
@@ -583,7 +621,7 @@ export function NovaOportunidade({ onOportunidadeAdded }: NovaOportunidadeProps)
                     </div>
                   )}
                   <p className="text-xs text-muted-foreground mt-2">
-                    Os documentos serão anexados após criar a oportunidade
+                    Os documentos serão anexados após criar a oportunidade.
                   </p>
                 </div>
               </div>
@@ -641,24 +679,17 @@ export function NovaOportunidade({ onOportunidadeAdded }: NovaOportunidadeProps)
             </div>
 
             <div className="space-y-2">
-              <Label>
-                Usuários Responsáveis <span className="text-red-500">*</span>
-              </Label>
-              <div className="grid grid-cols-2 gap-2 border rounded-md p-3">
-                {responsaveis.map((resp) => (
-                  <div key={resp.id} className="flex items-center space-x-2">
-                    <Checkbox
-                      id={resp.id}
-                      checked={resp.selecionado}
-                      onCheckedChange={(checked) => handleResponsavelChange(resp.id, checked as boolean)}
-                    />
-                    <Label htmlFor={resp.id} className="font-normal">
-                      {resp.nome}
-                    </Label>
-                  </div>
-                ))}
-              </div>
+                <Label>Responsável pela Reunião (Exemplo)</Label>
+                 <Select value={selectedResponsavelId} onValueChange={handleResponsavelSelectChange}>
+                    <SelectTrigger>
+                        <SelectValue placeholder="Selecione um responsável" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {listaResponsaveis.map(r => <SelectItem key={r.id} value={r.id}>{r.nome}</SelectItem>)}
+                    </SelectContent>
+                </Select>
             </div>
+
 
             <div className="border rounded-md p-4 space-y-4">
               <div className="flex items-center gap-2">
@@ -695,11 +726,11 @@ export function NovaOportunidade({ onOportunidadeAdded }: NovaOportunidadeProps)
               <Button variant="outline" onClick={handlePrevTab}>
                 Voltar
               </Button>
-              <Button onClick={handleSubmit} disabled={isSubmitting} className="bg-[#1B3A53] hover:bg-[#2c5a80]">
-                {isSubmitting ? (
+              <Button onClick={handleSubmit} disabled={isSubmitting || isUploadingAttachments} className="bg-[#1B3A53] hover:bg-[#2c5a80]">
+                {isSubmitting || isUploadingAttachments ? (
                   <>
-                    <Save className="mr-2 h-4 w-4 animate-spin" />
-                    Salvando...
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {isUploadingAttachments ? "Enviando anexos..." : "Salvando..."}
                   </>
                 ) : (
                   <>
