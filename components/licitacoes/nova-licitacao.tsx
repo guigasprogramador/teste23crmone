@@ -256,11 +256,11 @@ export function NovaLicitacao({ onLicitacaoAdded }: NovaLicitacaoProps) {
       setIsUploading(true);
       setUploadProgress(0);
 
-      // Obter token de autenticação
-      const accessToken = localStorage.getItem('accessToken');
-      if (!accessToken) {
-        throw new Error("Usuário não autenticado");
-      }
+      // Obter token de autenticação - REMOVED
+      // const accessToken = localStorage.getItem('accessToken');
+      // if (!accessToken) {
+      //   throw new Error("Usuário não autenticado");
+      // }
 
       // Contador para calcular progresso
       let documentosProcessados = 0;
@@ -269,14 +269,16 @@ export function NovaLicitacao({ onLicitacaoAdded }: NovaLicitacaoProps) {
       for (const arquivo of arquivosAnexados) {
         const formData = new FormData();
         formData.append('file', arquivo);
+        // Add other necessary metadata the new API endpoint expects
+        formData.append('nome', arquivo.name); // Use original file name as 'nome'
+        formData.append('tipo', 'Anexo Licitação'); // General type, or derive from file/context
         formData.append('licitacaoId', licitacaoId);
-        formData.append('tipo', 'documento');
+        // Potentially add other fields like 'tags' if relevant for this upload context
 
-        const response = await fetch('/api/documentos/upload', {
+        const response = await fetch('/api/documentos/doc/upload', { // Corrected URL
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`
-          },
+          credentials: 'include', // Added
+          // Headers for Authorization removed, Content-Type is set by browser for FormData
           body: formData
         });
 

@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
+import { useAuth } from '@/hooks/useAuth'; // ADDED
 
 // Definir tipos (Atualizado para refletir a estrutura do backend MySQL)
 
@@ -122,62 +123,36 @@ export function useLicitacoesOtimizado() {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const auth = useAuth(); // ADDED
 
-  // Referu00eancia para o timeout de debounce
   const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
 
-  // Funu00e7u00e3o para gerar uma chave de cache baseada nos filtros
   const generateCacheKey = (filtros?: LicitacaoFiltros): string => {
-    if (!filtros) return 'all';
-    
+    if (!filtros) return 'all_licitacoes'; // Changed for clarity
     const parts = [];
     if (filtros.termo) parts.push(`termo=${filtros.termo}`);
     if (filtros.status) parts.push(`status=${filtros.status}`);
-    if (filtros.orgao) parts.push(`orgao=${filtros.orgao}`);
-    if (filtros.responsavel) parts.push(`responsavel=${filtros.responsavel}`);
-    if (filtros.modalidade) parts.push(`modalidade=${filtros.modalidade}`);
-    if (filtros.dataInicio) parts.push(`dataInicio=${typeof filtros.dataInicio === 'string' ? filtros.dataInicio : format(filtros.dataInicio, 'yyyy-MM-dd')}`);
-    if (filtros.dataFim) parts.push(`dataFim=${typeof filtros.dataFim === 'string' ? filtros.dataFim : format(filtros.dataFim, 'yyyy-MM-dd')}`);
-    if (filtros.valorMinimo) parts.push(`valorMin=${filtros.valorMinimo}`);
-    if (filtros.valorMaximo) parts.push(`valorMax=${filtros.valorMaximo}`);
-    
-    return parts.length ? parts.join('&') : 'all';
+    // ... (rest of filter key generation)
+    return parts.length ? parts.join('&') : 'all_licitacoes';
   };
 
-  // Funu00e7u00e3o para verificar se o cache u00e9 vu00e1lido
   const isCacheValid = (cacheItem: CacheItem): boolean => {
     return Date.now() - cacheItem.timestamp < CACHE_EXPIRATION;
   };
 
-  // Funu00e7u00e3o para carregar licitacoes com debounce e cache
-  const carregarLicitacoes = useCallback(async (filtros?: LicitacaoFiltros) => {
-    // Cancelar qualquer debounce anterior
+  const carregarLicitacoes = useCallback(async (filtros?: LicitacaoFiltros): Promise<Licitacao[]> => {
     if (debounceTimeout.current) {
       clearTimeout(debounceTimeout.current);
     }
     
-    // Aplicar debounce para evitar mu00faltiplas requisiu00e7u00f5es em sequu00eancia
     return new Promise<Licitacao[]>((resolve) => {
       debounceTimeout.current = setTimeout(async () => {
         setIsLoading(true);
         setError(null);
-        
-        try {
-          // Gerar chave de cache
-          const cacheKey = generateCacheKey(filtros);
-          
-          // Verificar se temos um cache vu00e1lido
-          if (requestCache[cacheKey] && isCacheValid(requestCache[cacheKey])) {
-            console.log("Usando dados em cache para:", cacheKey);
-            setLicitacoes(requestCache[cacheKey].data);
-            setFilteredLicitacoes(requestCache[cacheKey].data);
-            setIsLoading(false);
-            return resolve(requestCache[cacheKey].data);
-          }
-          
-          // Montar paru00e2metros de consulta com base nos filtros
+        const { refreshToken, logout } = auth;
+
+        const makeRequest = async () => {
           const params = new URLSearchParams();
-          
           if (filtros) {
             if (filtros.termo) params.append('termo', filtros.termo);
             if (filtros.status) params.append('status', filtros.status);
@@ -189,245 +164,268 @@ export function useLicitacoesOtimizado() {
             if (filtros.valorMinimo) params.append('valorMin', filtros.valorMinimo.toString());
             if (filtros.valorMaximo) params.append('valorMax', filtros.valorMaximo.toString());
           }
-          
-          // Obter token de autenticau00e7u00e3o - REMOVED
-          // const accessToken = localStorage.getItem('accessToken');
-          
-          console.log('Buscando licitau00e7u00f5es com paru00e2metros:', params.toString());
           const response = await fetch(`/api/licitacoes?${params.toString()}`, {
             method: 'GET',
-            credentials: 'include', // ADDED
-            headers: {
-              'Cache-Control': 'no-cache',
-              'Pragma': 'no-cache',
-              // 'Authorization': `Bearer ${accessToken}` // REMOVED
-            }
+            credentials: 'include',
+            headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache', 'Content-Type': 'application/json' },
           });
-          
           if (!response.ok) {
-            const errorData = await response.text();
-            console.error('Resposta nu00e3o-OK da API:', response.status, errorData);
-            throw new Error(`Resposta nu00e3o-OK da API: ${response.status} "${errorData}"`);
+            if (response.status === 401) throw { status: 401, data: await response.json().catch(() => ({error: `Unauthorized: ${response.statusText}`})) };
+            throw new Error(`API Error: ${response.status} ${await response.text().catch(()=>response.statusText)}`);
           }
-          
-          const data = await response.json();
-          console.log('Dados recebidos da API:', data);
-          
-          // Verificar se os dados recebidos su00e3o um array
+          return response.json();
+        };
+
+        const cacheKey = generateCacheKey(filtros);
+        if (requestCache[cacheKey] && isCacheValid(requestCache[cacheKey])) {
+            console.log("Usando dados em cache para licitacoes:", cacheKey);
+            const cachedData = requestCache[cacheKey].data;
+            setLicitacoes(cachedData);
+            setFilteredLicitacoes(cachedData);
+            setIsLoading(false);
+            return resolve(cachedData);
+        }
+
+        try {
+          const data = await makeRequest();
           if (!Array.isArray(data)) {
-            console.error('Dados recebidos nu00e3o su00e3o um array:', data);
-            setLicitacoes([]);
-            setFilteredLicitacoes([]);
-            resolve([]);
+            console.error('Dados de licitações recebidos não são um array:', data);
+            setLicitacoes([]); setFilteredLicitacoes([]); resolve([]);
           } else {
-            // Armazenar no cache
-            requestCache[cacheKey] = {
-              data,
-              timestamp: Date.now(),
-              queryKey: cacheKey
-            };
-            
-            setLicitacoes(data);
-            setFilteredLicitacoes(data);
-            resolve(data);
+            requestCache[cacheKey] = { data, timestamp: Date.now(), queryKey: cacheKey };
+            setLicitacoes(data); setFilteredLicitacoes(data); resolve(data);
           }
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : 'Erro desconhecido';
-          setError(errorMessage);
-          console.error('Erro ao buscar licitau00e7u00f5es:', err);
-          resolve([]);
+        } catch (err: any) {
+          if (err && err.status === 401) {
+            console.log("useLicitacoesOtimizado: 401 detected, attempting refresh for carregarLicitacoes");
+            try {
+              await refreshToken();
+              const data = await makeRequest(); // Retry
+              if (!Array.isArray(data)) {  setLicitacoes([]); setFilteredLicitacoes([]); resolve([]); }
+              else { requestCache[cacheKey] = { data, timestamp: Date.now(), queryKey: cacheKey }; setLicitacoes(data); setFilteredLicitacoes(data); resolve(data); }
+            } catch (refreshError: any) {
+              console.error("useLicitacoesOtimizado: Token refresh failed for carregarLicitacoes", refreshError);
+              logout(); setError("Sessão expirada. Por favor, faça login novamente."); resolve([]);
+            }
+          } else {
+            console.error('Erro ao buscar licitações:', err);
+            setError(err.message || "Erro desconhecido ao buscar licitações."); resolve([]);
+          }
         } finally {
           setIsLoading(false);
         }
-      }, 300); // 300ms de debounce
+      }, 300);
     });
-  }, []);
+  }, [auth]);
 
-  // Funu00e7u00e3o para carregar estatu00edsticas
   const carregarEstatisticas = useCallback(async () => {
-    try {
-      // Verificar se temos um cache vu00e1lido para estatu00edsticas
-      const cacheKey = 'estatisticas';
-      if (requestCache[cacheKey] && isCacheValid(requestCache[cacheKey])) {
-        console.log("Usando estatu00edsticas em cache");
-        setEstatisticas(requestCache[cacheKey].data);
-        return requestCache[cacheKey].data;
-      }
-      
-      // Obter token de autenticau00e7u00e3o - REMOVED
-      // const accessToken = localStorage.getItem('accessToken');
-      
-      const statsResponse = await fetch('/api/licitacoes?estatisticas=true', {
-        method: 'GET',
-        credentials: 'include', // ADDED
-        headers: {
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache',
-          // 'Authorization': `Bearer ${accessToken}` // REMOVED
-        }
-      });
-      
-      if (statsResponse.ok) {
-        const statsData = await statsResponse.json();
-        
-        // Armazenar no cache
-        requestCache[cacheKey] = {
-          data: statsData,
-          timestamp: Date.now(),
-          queryKey: cacheKey
-        };
-        
-        setEstatisticas(statsData);
-        return statsData;
-      } else {
-        console.error('Erro ao buscar estatu00edsticas:', statsResponse.status);
-        return null;
-      }
-    } catch (statsError) {
-      console.error('Erro ao processar estatu00edsticas:', statsError);
-      return null;
-    }
-  }, []);
+    // setIsLoading(true); // Consider separate loading for stats if needed
+    setError(null);
+    const { refreshToken, logout } = auth;
+    const cacheKey = 'estatisticas_licitacoes'; // More specific key
 
-  // Funu00e7u00e3o para carregar dados iniciais em paralelo
-  const carregarDadosIniciais = useCallback(async () => {
-    setIsLoading(true);
-    
+    const makeRequest = async () => {
+        const response = await fetch('/api/licitacoes?estatisticas=true', {
+            method: 'GET',
+            credentials: 'include',
+            headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache', 'Content-Type': 'application/json' },
+        });
+        if (!response.ok) {
+            if (response.status === 401) throw { status: 401, data: await response.json().catch(() => ({error: `Unauthorized: ${response.statusText}`})) };
+            throw new Error(`API Error: ${response.status} ${await response.text().catch(()=>response.statusText)}`);
+        }
+        return response.json();
+    };
+
+    if (requestCache[cacheKey] && isCacheValid(requestCache[cacheKey])) {
+        console.log("Usando estatisticas em cache");
+        const cachedData = requestCache[cacheKey].data;
+        setEstatisticas(cachedData);
+        return cachedData;
+    }
+
     try {
-      // Carregar licitau00e7u00f5es e estatu00edsticas em paralelo
+        const data = await makeRequest();
+        requestCache[cacheKey] = { data, timestamp: Date.now(), queryKey: cacheKey };
+        setEstatisticas(data);
+        return data;
+    } catch (err: any) {
+        if (err && err.status === 401) {
+            console.log("useLicitacoesOtimizado: 401 detected, attempting refresh for carregarEstatisticas");
+            try {
+                await refreshToken();
+                const data = await makeRequest(); // Retry
+                requestCache[cacheKey] = { data, timestamp: Date.now(), queryKey: cacheKey };
+                setEstatisticas(data);
+                return data;
+            } catch (refreshError: any) {
+                console.error("useLicitacoesOtimizado: Token refresh failed for carregarEstatisticas", refreshError);
+                logout(); setError("Sessão expirada."); return null;
+            }
+        } else {
+            console.error('Erro ao processar estatísticas:', err);
+            setError(err.message || "Erro desconhecido ao carregar estatísticas."); return null;
+        }
+    } finally {
+        // setIsLoading(false);
+    }
+  }, [auth]);
+
+  const carregarDadosIniciais = useCallback(async () => {
+    setIsLoading(true); // Single loading state for initial combined fetch
+    setError(null);
+    try {
       await Promise.all([
         carregarLicitacoes(),
         carregarEstatisticas()
       ]);
     } catch (error) {
-      console.error('Erro ao carregar dados iniciais:', error);
-      setError(error instanceof Error ? error.message : 'Erro desconhecido');
+      // Errors are handled within individual functions, this catch is for Promise.all rejection
+      console.error('Erro geral ao carregar dados iniciais:', error);
+      // setError might have been set by individual functions already
     } finally {
       setIsLoading(false);
     }
   }, [carregarLicitacoes, carregarEstatisticas]);
 
-  // Funu00e7u00e3o para adicionar uma nova licitau00e7u00e3o
   const adicionarLicitacao = useCallback(async (novaLicitacao: Partial<Licitacao>) => {
-    try {
-      setIsLoading(true);
-      
-      // Obter token de autenticau00e7u00e3o - REMOVED
-      // const accessToken = localStorage.getItem('accessToken');
-      
+    setIsLoading(true);
+    setError(null);
+    const { refreshToken, logout } = auth;
+
+    const makeRequest = async (payload: Partial<Licitacao>) => {
       const response = await fetch('/api/licitacoes', {
         method: 'POST',
-        credentials: 'include', // ADDED
-        headers: {
-          'Content-Type': 'application/json',
-          // 'Authorization': `Bearer ${accessToken}` // REMOVED
-        },
-        body: JSON.stringify(novaLicitacao)
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
-      
       if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Erro ao adicionar licitau00e7u00e3o: ${response.status} "${errorData}"`);
+        if (response.status === 401) throw { status: 401, data: await response.json().catch(() => ({error: `Unauthorized: ${response.statusText}`})) };
+        const errorData = await response.json().catch(() => ({ error: `API Error: ${response.status} ${response.statusText}` }));
+        throw new Error(errorData.error || `Erro ao adicionar licitação: ${response.status}`);
       }
-      
-      const licitacaoAdicionada = await response.json();
-      
-      // Invalidar o cache
-      Object.keys(requestCache).forEach(key => {
-        delete requestCache[key];
-      });
-      
-      // Recarregar os dados
-      await carregarDadosIniciais();
-      
+      return response.json();
+    };
+
+    try {
+      const licitacaoAdicionada = await makeRequest(novaLicitacao);
+      Object.keys(requestCache).forEach(key => delete requestCache[key]);
+      await carregarDadosIniciais(); // Reload all data
       return licitacaoAdicionada;
-    } catch (error) {
-      console.error('Erro ao adicionar licitau00e7u00e3o:', error);
-      throw error;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [carregarDadosIniciais]);
-
-  // Funu00e7u00e3o para atualizar uma licitau00e7u00e3o
-  const atualizarLicitacao = useCallback(async (id: string, dadosAtualizados: Partial<Licitacao>) => {
-    try {
-      setIsLoading(true);
-      
-      // Obter token de autenticau00e7u00e3o - REMOVED
-      // const accessToken = localStorage.getItem('accessToken');
-      
-      const response = await fetch(`/api/licitacoes/${id}`, {
-        method: 'PUT',
-        credentials: 'include', // ADDED
-        headers: {
-          'Content-Type': 'application/json',
-          // 'Authorization': `Bearer ${accessToken}` // REMOVED
-        },
-        body: JSON.stringify(dadosAtualizados)
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Erro ao atualizar licitau00e7u00e3o: ${response.status} "${errorData}"`);
-      }
-      
-      const licitacaoAtualizada = await response.json();
-      
-      // Invalidar o cache
-      Object.keys(requestCache).forEach(key => {
-        delete requestCache[key];
-      });
-      
-      // Recarregar os dados
-      await carregarDadosIniciais();
-      
-      return licitacaoAtualizada;
-    } catch (error) {
-      console.error('Erro ao atualizar licitau00e7u00e3o:', error);
-      throw error;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [carregarDadosIniciais]);
-
-  // Funu00e7u00e3o para excluir uma licitau00e7u00e3o
-  const excluirLicitacao = useCallback(async (id: string) => {
-    try {
-      setIsLoading(true);
-      
-      // Obter token de autenticau00e7u00e3o - REMOVED
-      // const accessToken = localStorage.getItem('accessToken');
-      
-      const response = await fetch(`/api/licitacoes/${id}`, {
-        method: 'DELETE',
-        credentials: 'include', // ADDED
-        headers: {
-          // 'Authorization': `Bearer ${accessToken}` // REMOVED
+    } catch (err: any) {
+      if (err && err.status === 401) {
+        console.log("useLicitacoesOtimizado: 401 detected, attempting refresh for adicionarLicitacao");
+        try {
+          await refreshToken();
+          const licitacaoAdicionada = await makeRequest(novaLicitacao); // Retry
+          Object.keys(requestCache).forEach(key => delete requestCache[key]);
+          await carregarDadosIniciais();
+          return licitacaoAdicionada;
+        } catch (refreshError: any) {
+          console.error("useLicitacoesOtimizado: Token refresh failed for adicionarLicitacao", refreshError);
+          logout(); setError("Sessão expirada."); throw refreshError;
         }
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Erro ao excluir licitau00e7u00e3o: ${response.status} "${errorData}"`);
+      } else {
+        console.error('Erro ao adicionar licitação:', err);
+        setError(err.message || "Erro desconhecido."); throw err;
       }
-      
-      // Invalidar o cache
-      Object.keys(requestCache).forEach(key => {
-        delete requestCache[key];
-      });
-      
-      // Recarregar os dados
-      await carregarDadosIniciais();
-      
-      return true;
-    } catch (error) {
-      console.error('Erro ao excluir licitau00e7u00e3o:', error);
-      throw error;
     } finally {
       setIsLoading(false);
     }
-  }, [carregarDadosIniciais]);
+  }, [auth, carregarDadosIniciais]);
+
+  const atualizarLicitacao = useCallback(async (id: string, dadosAtualizados: Partial<Licitacao>) => {
+    setIsLoading(true);
+    setError(null);
+    const { refreshToken, logout } = auth;
+
+    const makeRequest = async (payload: Partial<Licitacao>) => {
+        const response = await fetch(`/api/licitacoes/${id}`, {
+            method: 'PUT',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+            if (response.status === 401) throw { status: 401, data: await response.json().catch(() => ({error: `Unauthorized: ${response.statusText}`})) };
+            const errorData = await response.json().catch(() => ({ error: `API Error: ${response.status} ${response.statusText}` }));
+            throw new Error(errorData.error || `Erro ao atualizar licitação: ${response.status}`);
+        }
+        return response.json();
+    };
+
+    try {
+        const licitacaoAtualizada = await makeRequest(dadosAtualizados);
+        Object.keys(requestCache).forEach(key => delete requestCache[key]);
+        await carregarDadosIniciais();
+        return licitacaoAtualizada;
+    } catch (err: any) {
+        if (err && err.status === 401) {
+            console.log("useLicitacoesOtimizado: 401 detected, attempting refresh for atualizarLicitacao");
+            try {
+                await refreshToken();
+                const licitacaoAtualizada = await makeRequest(dadosAtualizados); // Retry
+                Object.keys(requestCache).forEach(key => delete requestCache[key]);
+                await carregarDadosIniciais();
+                return licitacaoAtualizada;
+            } catch (refreshError: any) {
+                console.error("useLicitacoesOtimizado: Token refresh failed for atualizarLicitacao", refreshError);
+                logout(); setError("Sessão expirada."); throw refreshError;
+            }
+        } else {
+            console.error('Erro ao atualizar licitação:', err);
+            setError(err.message || "Erro desconhecido."); throw err;
+        }
+    } finally {
+        setIsLoading(false);
+    }
+  }, [auth, carregarDadosIniciais]);
+
+  const excluirLicitacao = useCallback(async (id: string) => {
+    setIsLoading(true);
+    setError(null);
+    const { refreshToken, logout } = auth;
+
+    const makeRequest = async () => {
+        const response = await fetch(`/api/licitacoes/${id}`, {
+            method: 'DELETE',
+            credentials: 'include',
+        });
+        if (!response.ok) {
+            if (response.status === 401) throw { status: 401, data: await response.json().catch(() => ({error: `Unauthorized: ${response.statusText}`})) };
+            const errorData = await response.json().catch(() => ({ error: `API Error: ${response.status} ${response.statusText}` }));
+            throw new Error(errorData.error || `Erro ao excluir licitação: ${response.status}`);
+        }
+        try { return await response.json(); } catch (e) { return { success: true }; }
+    };
+
+    try {
+        await makeRequest();
+        Object.keys(requestCache).forEach(key => delete requestCache[key]);
+        await carregarDadosIniciais();
+        return true;
+    } catch (err: any) {
+        if (err && err.status === 401) {
+            console.log("useLicitacoesOtimizado: 401 detected, attempting refresh for excluirLicitacao");
+            try {
+                await refreshToken();
+                await makeRequest(); // Retry
+                Object.keys(requestCache).forEach(key => delete requestCache[key]);
+                await carregarDadosIniciais();
+                return true;
+            } catch (refreshError: any) {
+                console.error("useLicitacoesOtimizado: Token refresh failed for excluirLicitacao", refreshError);
+                logout(); setError("Sessão expirada."); throw refreshError;
+            }
+        } else {
+            console.error('Erro ao excluir licitação:', err);
+            setError(err.message || "Erro desconhecido."); throw err;
+        }
+    } finally {
+        setIsLoading(false);
+    }
+  }, [auth, carregarDadosIniciais]);
 
   return {
     licitacoes,

@@ -1,18 +1,19 @@
 import { useState, useCallback } from 'react';
+import { useAuth } from '@/hooks/useAuth';
 
 // Interfaces para documentos (Atualizadas para MySQL API)
 export interface DocumentType {
   id: string;
   nome: string;
   tipo: string;
-  tags?: string[]; // Changed from categorias
+  tags?: string[];
   descricao?: string;
-  licitacaoId?: string; // Corresponds to licitacao_id
-  licitacaoTitulo?: string; // Joined from licitacoes table
-  numeroDocumento?: string; // Corresponds to numero_documento
-  dataValidade?: string; // Format DD/MM/YYYY from API
-  urlDocumento?: string | null; // Placeholder
-  arquivoPath?: string | null; // Placeholder
+  licitacaoId?: string;
+  licitacaoTitulo?: string;
+  numeroDocumento?: string;
+  dataValidade?: string; // Format DD/MM/YYYY from API if transformed by backend, or ISO
+  urlDocumento?: string | null;
+  arquivoPath?: string | null; // Cloudinary public_id
   formato?: string;
   tamanho?: number;
   status: string;
@@ -20,31 +21,29 @@ export interface DocumentType {
   criadoPorNome?: string; // User Name
   dataCriacao: string; // ISO String
   dataAtualizacao: string; // ISO String
-  categoriaLegado?: string; // Legacy 'categoria' field if still needed
-  // publicUrl is removed as it was Supabase specific and now urlDocumento is a placeholder
+  categoriaLegado?: string;
 }
 
 export interface DocumentFilter {
   licitacaoId?: string;
   tipo?: string;
-  tagNome?: string; // Changed from categoria
+  tagNome?: string;
   status?: string;
 }
 
 export interface DocumentFormData {
   nome: string;
   tipo: string;
-  tags?: string[]; // Changed from categorias
+  tags?: string[];
   descricao?: string;
   licitacaoId?: string;
   numeroDocumento?: string;
   dataValidade?: string; // Expected as YYYY-MM-DD or string parsable by new Date()
-  // urlDocumento is handled by backend (placeholder)
-  arquivo?: File; // For upload
-  // Adicionar outros campos que o POST/PATCH da API de metadados aceita
+  arquivo?: File;
   status?: string;
-  criadoPor?: string; // User ID, should be set by auth context typically
+  // criadoPor is handled by backend via JWT
   categoriaLegado?: string;
+  // urlDocumento is handled by backend
 }
 
 // Hook para gerenciar operações de documentos
@@ -52,350 +51,423 @@ export function useDocuments() {
   const [documents, setDocuments] = useState<DocumentType[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const auth = useAuth(); // Call useAuth at the top level
 
-  // Buscar todos os documentos ou filtrar
   const fetchDocuments = useCallback(async (filters?: DocumentFilter) => {
     setLoading(true);
     setError(null);
+    const { refreshToken, logout } = auth;
 
-    try {
-      // Construir URL com parâmetros de filtro
+    const makeRequest = async () => {
       let url = '/api/documentos/doc';
       const params = new URLSearchParams();
-      
       if (filters) {
         if (filters.licitacaoId) params.append('licitacaoId', filters.licitacaoId);
         if (filters.tipo) params.append('tipo', filters.tipo);
-        if (filters.tagNome) params.append('tagNome', filters.tagNome); // Changed from categoria to tagNome
+        if (filters.tagNome) params.append('tagNome', filters.tagNome);
         if (filters.status) params.append('status', filters.status);
       }
-
-      // Adicionar parâmetros à URL se houver
       if (params.toString()) {
         url += `?${params.toString()}`;
       }
 
       const response = await fetch(url, {
         method: 'GET',
-        credentials: 'include', // Add credentials: 'include'
-        headers: {
-          // 'Authorization': `Bearer ${token}`, // Remove Authorization header
-          'Content-Type': 'application/json'
-        }
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
       });
-
       if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Erro ao buscar documentos: ${response.status} ${errorData}`);
+        if (response.status === 401) {
+          throw { status: 401, data: await response.json().catch(() => ({ error: `Unauthorized: ${response.statusText}` })) };
+        }
+        throw new Error(`API Error: ${response.status} ${await response.text().catch(() => response.statusText)}`);
       }
+      return response.json();
+    };
 
-      const data = await response.json();
+    try {
+      const data = await makeRequest();
       setDocuments(data.documentos || []);
       return data.documentos || [];
     } catch (err: any) {
-      console.error('Erro ao buscar documentos:', err);
-      setError(err.message);
-      return [];
+      if (err && err.status === 401) {
+        console.log("useDocuments: 401 detected, attempting refresh for fetchDocuments");
+        try {
+          await refreshToken();
+          console.log("useDocuments: Token refreshed, retrying fetchDocuments");
+          const data = await makeRequest(); // Retry
+          setDocuments(data.documentos || []);
+          return data.documentos || [];
+        } catch (refreshError: any) {
+          console.error("useDocuments: Token refresh failed for fetchDocuments", refreshError);
+          logout(); // Consider if logout should be conditional based on refreshError type
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          return [];
+        }
+      } else {
+        console.error('Erro ao buscar documentos:', err);
+        setError(err.message || "Erro desconhecido ao buscar documentos.");
+        return [];
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [auth]);
 
-  // Buscar um documento específico pelo ID
   const fetchDocumentById = useCallback(async (id: string) => {
     setLoading(true);
     setError(null);
+    const { refreshToken, logout } = auth;
 
-    try {
+    const makeRequest = async () => {
       const response = await fetch(`/api/documentos/doc/${id}`, {
         method: 'GET',
-        credentials: 'include', // Add credentials: 'include'
-        headers: {
-          // 'Authorization': `Bearer ${token}`, // Remove Authorization header
-          'Content-Type': 'application/json'
-        }
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
       });
-
       if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Erro ao buscar documento: ${response.status} ${errorData}`);
+        if (response.status === 401) {
+          throw { status: 401, data: await response.json().catch(() => ({ error: `Unauthorized: ${response.statusText}` })) };
+        }
+        throw new Error(`API Error: ${response.status} ${await response.text().catch(() => response.statusText)}`);
       }
+      return response.json();
+    };
 
-      const data = await response.json();
+    try {
+      const data = await makeRequest();
       return data.documento;
     } catch (err: any) {
-      console.error('Erro ao buscar documento:', err);
-      setError(err.message);
-      return null;
+      if (err && err.status === 401) {
+        console.log("useDocuments: 401 detected, attempting refresh for fetchDocumentById");
+        try {
+          await refreshToken();
+          console.log("useDocuments: Token refreshed, retrying fetchDocumentById");
+          const data = await makeRequest(); // Retry
+          return data.documento;
+        } catch (refreshError: any) {
+          console.error("useDocuments: Token refresh failed for fetchDocumentById", refreshError);
+          logout();
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          return null;
+        }
+      } else {
+        console.error('Erro ao buscar documento por ID:', err);
+        setError(err.message || "Erro desconhecido.");
+        return null;
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [auth]);
 
-  // Criar um novo documento (apenas metadados, sem upload de arquivo)
   const createDocument = useCallback(async (documentData: Omit<DocumentFormData, 'arquivo'>) => {
     setLoading(true);
     setError(null);
-    try {
-      // API /api/documentos/doc (POST) agora espera 'tags' como array de strings
-      // e outros campos relevantes como 'criadoPor' (userId) - backend will get from JWT
-      const payload = {
-        nome: documentData.nome,
-        tipo: documentData.tipo,
-        licitacaoId: documentData.licitacaoId,
-        descricao: documentData.descricao,
-        numeroDocumento: documentData.numeroDocumento,
-        dataValidade: documentData.dataValidade, // API espera YYYY-MM-DD ou null
-        tags: documentData.tags || [],
-        // criadoPor: getAuthToken() ? JSON.parse(atob(getAuthToken()!.split('.')[1])).userId : null, // REMOVED - Backend will handle
-        status: documentData.status || 'ativo',
-        categoriaLegado: documentData.categoriaLegado
-      };
-      
+    const { refreshToken, logout } = auth;
+
+    const payload = {
+      nome: documentData.nome, tipo: documentData.tipo, licitacaoId: documentData.licitacaoId,
+      descricao: documentData.descricao, numeroDocumento: documentData.numeroDocumento,
+      dataValidade: documentData.dataValidade, tags: documentData.tags || [],
+      status: documentData.status || 'ativo', categoriaLegado: documentData.categoriaLegado,
+    };
+
+    const makeRequest = async (currentPayload: typeof payload) => {
       const response = await fetch('/api/documentos/doc', {
         method: 'POST',
-        credentials: 'include', // Add credentials: 'include'
-        headers: {
-          // 'Authorization': `Bearer ${token}`, // Remove Authorization header
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(currentPayload),
       });
-
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: `Erro ao criar documento: ${response.statusText}` }));
+        if (response.status === 401) {
+          throw { status: 401, data: await response.json().catch(() => ({ error: `Unauthorized: ${response.statusText}` })) };
+        }
+        const errorData = await response.json().catch(() => ({ error: `API Error: ${response.status} ${response.statusText}` }));
         throw new Error(errorData.error || `Erro ao criar documento: ${response.status}`);
       }
+      return response.json();
+    };
 
-      const data = await response.json();
-      
-      // Adicionar o novo documento à lista local
-      if (data.documento) { // API agora retorna { success, message, documento }
+    try {
+      const data = await makeRequest(payload);
+      if (data.documento) {
         setDocuments(prevDocs => [data.documento, ...prevDocs]);
         return data.documento;
       }
-      return null; // Ou lançar erro se data.documento não existir
-    } catch (err: any) {
-      console.error('Erro ao criar documento:', err);
-      setError(err.message);
       return null;
+    } catch (err: any) {
+      if (err && err.status === 401) {
+        console.log("useDocuments: 401 detected, attempting refresh for createDocument");
+        try {
+          await refreshToken();
+          console.log("useDocuments: Token refreshed, retrying createDocument");
+          const data = await makeRequest(payload); // Retry
+          if (data.documento) {
+            setDocuments(prevDocs => [data.documento, ...prevDocs]);
+            return data.documento;
+          }
+          return null;
+        } catch (refreshError: any) {
+          console.error("useDocuments: Token refresh failed for createDocument", refreshError);
+          logout();
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          return null;
+        }
+      } else {
+        console.error('Erro ao criar documento:', err);
+        setError(err.message || "Erro desconhecido.");
+        return null;
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [auth]);
 
-  // Upload de documento com arquivo
   const uploadDocument = useCallback(async (documentData: DocumentFormData) => {
     setLoading(true);
     setError(null);
+    const { refreshToken, logout } = auth;
 
-    try {
-      // Se não tiver arquivo, usar a função createDocument
-      if (!documentData.arquivo) {
-        const { arquivo, ...metadataOnly } = documentData;
-        return createDocument(metadataOnly);
-      }
+    if (!documentData.arquivo) {
+      const { arquivo, ...metadataOnly } = documentData;
+      return createDocument(metadataOnly); // createDocument has its own refresh logic
+    }
 
-      // Preparar FormData para upload
-      const formData = new FormData();
-      formData.append('file', documentData.arquivo);
-      formData.append('nome', documentData.nome);
-      formData.append('tipo', documentData.tipo);
-      
-      // Enviar tags como string separada por vírgulas para FormData
-      if (documentData.tags && documentData.tags.length > 0) {
-        formData.append('tags', documentData.tags.join(','));
-      }
-      
-      if (documentData.descricao) formData.append('descricao', documentData.descricao);
-      if (documentData.licitacaoId) formData.append('licitacaoId', documentData.licitacaoId);
-      if (documentData.numeroDocumento) formData.append('numeroDocumento', documentData.numeroDocumento);
-      if (documentData.dataValidade) formData.append('dataValidade', documentData.dataValidade); // API espera YYYY-MM-DD
-      // urlDocumento é placeholder, não precisa enviar
-
-      // Adicionar criadoPor (uploadPor na API de upload) - backend will handle
-      // const decodedToken = getAuthToken() ? JSON.parse(atob(getAuthToken()!.split('.')[1])) : null;
-      // if (decodedToken && decodedToken.userId) {
-      //   formData.append('uploadPor', decodedToken.userId);
-      // } else {
-      //   console.warn("ID do usuário não encontrado para 'uploadPor'");
-      //   // Considerar lançar erro ou não enviar se for obrigatório
-      // }
-      if (documentData.status) formData.append('status', documentData.status);
-      if (documentData.categoriaLegado) formData.append('categoria', documentData.categoriaLegado);
-
+    const makeUploadRequest = async () => {
+      const formDataPayload = new FormData();
+      formDataPayload.append('file', documentData.arquivo as File);
+      formDataPayload.append('nome', documentData.nome);
+      formDataPayload.append('tipo', documentData.tipo);
+      if (documentData.tags && documentData.tags.length > 0) formDataPayload.append('tags', documentData.tags.join(','));
+      if (documentData.descricao) formDataPayload.append('descricao', documentData.descricao);
+      if (documentData.licitacaoId) formDataPayload.append('licitacaoId', documentData.licitacaoId);
+      if (documentData.numeroDocumento) formDataPayload.append('numeroDocumento', documentData.numeroDocumento);
+      if (documentData.dataValidade) formDataPayload.append('dataValidade', documentData.dataValidade);
+      if (documentData.status) formDataPayload.append('status', documentData.status);
+      if (documentData.categoriaLegado) formDataPayload.append('categoria', documentData.categoriaLegado);
 
       const response = await fetch('/api/documentos/doc/upload', {
         method: 'POST',
-        credentials: 'include', // Add credentials: 'include'
-        // headers: { // Remove Authorization header - FormData sets Content-Type
-        //   'Authorization': `Bearer ${token}`
-        // },
-        body: formData
+        credentials: 'include',
+        body: formDataPayload,
       });
-
       if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Erro ao fazer upload do documento: ${response.status} ${errorData}`);
+        if (response.status === 401) {
+          throw { status: 401, data: await response.json().catch(() => ({ error: `Unauthorized: ${response.statusText}` })) };
+        }
+        const errorText = await response.text().catch(() => response.statusText);
+        throw new Error(`API Error: ${response.status} ${errorText}`);
       }
+      return response.json();
+    };
 
-      const data = await response.json();
-      
-      // Adicionar o novo documento à lista local
+    try {
+      const data = await makeUploadRequest();
       if (data.documento) {
         setDocuments(prevDocs => [...prevDocs, data.documento]);
       }
-      
       return data;
     } catch (err: any) {
-      console.error('Erro ao fazer upload do documento:', err);
-      setError(err.message);
-      return null;
+      if (err && err.status === 401) {
+        console.log("useDocuments: 401 detected, attempting refresh for uploadDocument");
+        try {
+          await refreshToken();
+          console.log("useDocuments: Token refreshed, retrying uploadDocument");
+          const data = await makeUploadRequest(); // Retry
+          if (data.documento) {
+            setDocuments(prevDocs => [...prevDocs, data.documento]);
+          }
+          return data;
+        } catch (refreshError: any) {
+          console.error("useDocuments: Token refresh failed for uploadDocument", refreshError);
+          logout();
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          return null;
+        }
+      } else {
+        console.error('Erro ao fazer upload do documento:', err);
+        setError(err.message || "Erro desconhecido.");
+        return null;
+      }
     } finally {
       setLoading(false);
     }
-  }, [createDocument]);
+  }, [auth, createDocument]);
 
-  // Excluir um documento
   const deleteDocument = useCallback(async (id: string, fisicamente: boolean = false) => {
     setLoading(true);
     setError(null);
+    const { refreshToken, logout } = auth;
 
-    try {
-      // A API DELETE em /api/documentos/doc/[id] agora lida com o parâmetro 'fisicamente'
+    const makeRequest = async () => {
       const url = `/api/documentos/doc/${id}?fisicamente=${fisicamente}`;
-
       const response = await fetch(url, {
         method: 'DELETE',
-        credentials: 'include', // Add credentials: 'include'
-        headers: {
-          // 'Authorization': `Bearer ${token}`, // Remove Authorization header
-          // Content-Type não é usualmente necessário para DELETE se não houver corpo
-        }
+        credentials: 'include',
       });
-
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({error: `Erro ao excluir documento: ${response.statusText}`}));
+        if (response.status === 401) {
+          throw { status: 401, data: await response.json().catch(() => ({ error: `Unauthorized: ${response.statusText}` })) };
+        }
+        const errorData = await response.json().catch(() => ({ error: `API Error: ${response.status} ${response.statusText}` }));
         throw new Error(errorData.error || `Erro ao excluir documento: ${response.status}`);
       }
+      return response.json();
+    };
 
-      // Remover ou atualizar o documento na lista local
-      if (fisicamente) {
-        setDocuments(prevDocs => prevDocs.filter(doc => doc.id !== id));
-      } else {
-        setDocuments(prevDocs =>
-          prevDocs.map(doc => (doc.id === id ? { ...doc, status: 'excluido' } : doc))
-        );
+    try {
+      const data = await makeRequest();
+      if (data.success) {
+        if (fisicamente) {
+          setDocuments(prevDocs => prevDocs.filter(doc => doc.id !== id));
+        } else {
+          setDocuments(prevDocs =>
+            prevDocs.map(doc => (doc.id === id ? { ...doc, status: 'excluido' } : doc))
+          );
+        }
       }
-
-      const data = await response.json(); // API retorna { success: true, message: '...' }
-      return data.success; // Retornar boolean para delete
+      return data.success;
     } catch (err: any) {
-      console.error('Erro ao excluir documento:', err);
-      setError(err.message);
-      return null;
+      if (err && err.status === 401) {
+        console.log("useDocuments: 401 detected, attempting refresh for deleteDocument");
+        try {
+          await refreshToken();
+          console.log("useDocuments: Token refreshed, retrying deleteDocument");
+          const data = await makeRequest(); // Retry
+           if (data.success) {
+            if (fisicamente) {
+              setDocuments(prevDocs => prevDocs.filter(doc => doc.id !== id));
+            } else {
+              setDocuments(prevDocs =>
+                prevDocs.map(doc => (doc.id === id ? { ...doc, status: 'excluido' } : doc))
+              );
+            }
+          }
+          return data.success;
+        } catch (refreshError: any) {
+          console.error("useDocuments: Token refresh failed for deleteDocument", refreshError);
+          logout();
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          return false;
+        }
+      } else {
+        console.error('Erro ao excluir documento:', err);
+        setError(err.message || "Erro desconhecido.");
+        return false;
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [auth]);
 
-  // Atualizar um documento existente
   const updateDocument = useCallback(async (id: string, updateData: Partial<DocumentFormData>) => {
     setLoading(true);
     setError(null);
+    const { refreshToken, logout } = auth;
 
-    try {
-      // Se houver arquivo, fazer upload e atualizar o documento
-      if (updateData.arquivo) {
-        // Buscar documento atual para obter outros dados
-        const currentDoc = await fetchDocumentById(id);
+    if (updateData.arquivo) {
+      try {
+        const currentDoc = await fetchDocumentById(id); // Has its own refresh logic
         if (!currentDoc) {
-          throw new Error('Documento não encontrado');
+            setError('Documento original não encontrado para atualização com arquivo.');
+            setLoading(false);
+            return null;
         }
 
-        // Preparar dados completos para upload
-        const uploadData: DocumentFormData = {
-          nome: updateData.nome || currentDoc.nome,
-          tipo: updateData.tipo || currentDoc.tipo,
-          categorias: updateData.categorias || currentDoc.categorias || [],
-          descricao: updateData.descricao || currentDoc.descricao,
-          licitacaoId: updateData.licitacaoId || currentDoc.licitacao_id,
-          numeroDocumento: updateData.numeroDocumento || currentDoc.numero_documento,
-          dataValidade: updateData.dataValidade || currentDoc.data_validade,
-          urlDocumento: updateData.urlDocumento || currentDoc.url_documento,
-          arquivo: updateData.arquivo
+        const uploadPayload: DocumentFormData = {
+            nome: updateData.nome || currentDoc.nome,
+            tipo: updateData.tipo || currentDoc.tipo,
+            tags: updateData.tags || currentDoc.tags,
+            descricao: updateData.descricao || currentDoc.descricao,
+            licitacaoId: updateData.licitacaoId || currentDoc.licitacaoId,
+            numeroDocumento: updateData.numeroDocumento || currentDoc.numeroDocumento,
+            dataValidade: updateData.dataValidade || currentDoc.dataValidade, // Ensure format consistency
+            arquivo: updateData.arquivo,
+            status: updateData.status || currentDoc.status,
+            categoriaLegado: updateData.categoriaLegado || currentDoc.categoriaLegado,
         };
 
-        // Fazer upload do novo arquivo
-        const uploadResult = await uploadDocument(uploadData);
-        if (!uploadResult) {
-          throw new Error('Erro ao fazer upload do arquivo atualizado');
+        const uploadResult = await uploadDocument(uploadPayload); // Has its own refresh logic
+        if (!uploadResult || !uploadResult.documento) {
+          throw new Error('Erro ao fazer upload do arquivo atualizado durante a atualização do documento.');
         }
-
-        // Excluir o documento antigo (soft delete)
-        await deleteDocument(id, false);
         
+        // Assuming upload replaces the document or the backend handles old file cleanup if new ID is generated
+        // For simplicity, we'll update the local state with the result from upload.
+        // If the backend guarantees the same ID, this map is fine. If ID changes, more complex state update needed.
+        setDocuments(prevDocs => prevDocs.map(doc => doc.id === id ? uploadResult.documento : doc));
         return uploadResult.documento;
+
+      } catch(err:any) {
+        console.error('Erro ao atualizar documento com arquivo:', err);
+        setError(err.message || "Erro desconhecido ao atualizar documento com arquivo.");
+        // No explicit logout/refresh here as called functions handle it
+        return null;
+      } finally {
+        setLoading(false);
       }
+    }
 
-      // Se não tiver arquivo, apenas atualizar os metadados
-      try {
-        // Se não tiver arquivo, apenas atualizar os metadados
-        // A API PATCH em /api/documentos/doc ou /api/documentos/doc/[id]
-        // agora espera 'tags' como array.
-        console.warn("Atualização de arquivo em updateDocument não é suportada diretamente. Faça upload separado e atualize metadados se necessário.");
-        
-        const metadataToUpdate: Partial<DocumentType> = { ...updateData };
-        delete metadataToUpdate.arquivo; // Remover o campo arquivo se existir
-        if (updateData.tags) { // Assegurar que tags é um array
-            metadataToUpdate.tags = Array.isArray(updateData.tags) ? updateData.tags : [];
+    // Metadata only update
+    const metadataToUpdate: Partial<DocumentType> = { ...updateData };
+    delete metadataToUpdate.arquivo; // Ensure 'arquivo' field is not in metadata-only update payload
+    if (updateData.tags) metadataToUpdate.tags = Array.isArray(updateData.tags) ? updateData.tags : [];
+
+
+    const makeMetadataUpdateRequest = async (payload: Partial<DocumentType>) => {
+      const apiUrl = `/api/documentos/doc/${id}`;
+      const response = await fetch(apiUrl, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw { status: 401, data: await response.json().catch(() => ({ error: `Unauthorized: ${response.statusText}` })) };
         }
-
-
-        // Decidir qual endpoint PATCH usar. Se o PATCH em /api/documentos/doc aceita ID no corpo:
-        // const apiUrl = '/api/documentos/doc';
-        // Ou se o PATCH em /api/documentos/doc/[id] é o preferido para atualizações:
-        const apiUrl = `/api/documentos/doc/${id}`;
-
-        const response = await fetch(apiUrl, {
-          method: 'PATCH',
-          credentials: 'include', // Add credentials: 'include'
-          headers: {
-            // 'Authorization': `Bearer ${token}`, // Remove Authorization header
-            'Content-Type': 'application/json'
-          },
-          // Se usar PATCH em /api/documentos/doc, o ID deve estar no corpo.
-          // Se usar PATCH em /api/documentos/doc/[id], o ID já está na URL.
-          body: JSON.stringify(apiUrl === '/api/documentos/doc' ? { id, ...metadataToUpdate } : metadataToUpdate)
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({error: `Erro ao atualizar metadados: ${response.statusText}`}));
-          throw new Error(errorData.error || `Erro ao atualizar metadados: ${response.status}`);
-        }
-
-        const data = await response.json();
-        
-        // Atualizar o documento na lista local
-        if (data.documento){
-          setDocuments(prevDocs =>
-            prevDocs.map(doc => doc.id === id ? data.documento : doc)
-          );
-          return data.documento;
-        }
-        return null; // Ou lançar erro se data.documento não existir
-      } catch (metadataError: any) {
-        console.error('Erro ao atualizar apenas os metadados do documento:', metadataError);
-        throw metadataError; // Re-throw para ser pego pelo catch externo
+        const errorData = await response.json().catch(() => ({ error: `API Error: ${response.status} ${response.statusText}` }));
+        throw new Error(errorData.error || `Erro ao atualizar metadados: ${response.status}`);
       }
-    } catch (err: any) {
-      console.error('Erro ao atualizar documento:', err);
-      setError(err.message);
+      return response.json();
+    };
+
+    try {
+      const data = await makeMetadataUpdateRequest(metadataToUpdate);
+      if (data.documento) {
+        setDocuments(prevDocs => prevDocs.map(doc => doc.id === id ? data.documento : doc));
+        return data.documento;
+      }
       return null;
+    } catch (err: any) {
+      if (err && err.status === 401) {
+        console.log("useDocuments: 401 detected, attempting refresh for updateDocument (metadata)");
+        try {
+          await refreshToken();
+          console.log("useDocuments: Token refreshed, retrying updateDocument (metadata)");
+          const data = await makeMetadataUpdateRequest(metadataToUpdate); // Retry
+          if (data.documento) {
+            setDocuments(prevDocs => prevDocs.map(doc => doc.id === id ? data.documento : doc));
+            return data.documento;
+          }
+          return null;
+        } catch (refreshError: any) {
+          console.error("useDocuments: Token refresh failed for updateDocument (metadata)", refreshError);
+          logout();
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          return null;
+        }
+      } else {
+        console.error('Erro ao atualizar metadados do documento:', err);
+        setError(err.message || "Erro desconhecido.");
+        return null;
+      }
     } finally {
       setLoading(false);
     }
-  }, [fetchDocumentById, uploadDocument, deleteDocument]);
+  }, [auth, fetchDocumentById, uploadDocument, createDocument]);
 
   return {
     documents,
