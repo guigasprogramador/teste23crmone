@@ -26,31 +26,21 @@ export function SeletorDocumentosComercial({ onDocumentosSelecionados }: Seletor
     const carregarDocumentos = async () => {
       try {
         setCarregando(true)
-        // Buscar todos os documentos
-        const todosDocumentos = await fetchDocuments()
+        // Buscar documentos com a tag "comercial"
+        const docsComercialApi = await fetchDocuments({ tagNome: 'comercial' });
         
-        if (todosDocumentos) {
-          // Filtrar documentos que contêm a tag "comercial" (podendo ter outras também)
-          const docsComercial = todosDocumentos.filter(doc => {
-            // Verificar se categorias é um array
-            if (Array.isArray(doc.categorias)) {
-              return doc.categorias.includes('comercial');
-            }
-            
-            // Verificar no campo categoria (string separada por vírgulas)
-            if (typeof doc.categoria === 'string') {
-              const categorias = doc.categoria.split(',').map(c => c.trim());
-              return categorias.includes('comercial');
-            }
-            
-            return false;
-          });
-          
-          setDocumentos(docsComercial);
-          setDocumentosFiltrados(docsComercial);
+        if (docsComercialApi) {
+          // A API já retorna os documentos filtrados pela tag "comercial"
+          setDocumentos(docsComercialApi);
+          setDocumentosFiltrados(docsComercialApi);
+        } else {
+          setDocumentos([]);
+          setDocumentosFiltrados([]);
         }
       } catch (error) {
         console.error("Erro ao carregar documentos:", error);
+        setDocumentos([]); // Ensure states are empty on error
+        setDocumentosFiltrados([]);
       } finally {
         setCarregando(false);
       }

@@ -28,31 +28,21 @@ export function SeletorDocumentosLicitacao({
     const carregarDocumentos = async () => {
       try {
         setCarregando(true)
-        // Buscar todos os documentos
-        const todosDocumentos = await fetchDocuments()
+        // Buscar documentos com a tag "licitacao"
+        const docsLicitacaoApi = await fetchDocuments({ tagNome: 'licitacao' });
         
-        if (todosDocumentos) {
-          // Filtrar documentos que contêm a tag "licitacao" (podendo ter outras também)
-          const docsLicitacao = todosDocumentos.filter(doc => {
-            // Verificar se categorias é um array
-            if (Array.isArray(doc.categorias)) {
-              return doc.categorias.includes('licitacao');
-            }
-            
-            // Verificar no campo categoria (string separada por vírgulas)
-            if (typeof doc.categoria === 'string') {
-              const categorias = doc.categoria.split(',').map(c => c.trim());
-              return categorias.includes('licitacao');
-            }
-            
-            return false;
-          });
-          
-          setDocumentos(docsLicitacao);
-          setDocumentosFiltrados(docsLicitacao);
+        if (docsLicitacaoApi) {
+          // A API já retorna os documentos filtrados pela tag "licitacao"
+          setDocumentos(docsLicitacaoApi);
+          setDocumentosFiltrados(docsLicitacaoApi);
+        } else {
+          setDocumentos([]);
+          setDocumentosFiltrados([]);
         }
       } catch (error) {
         console.error("Erro ao carregar documentos:", error);
+        setDocumentos([]); // Ensure states are empty on error
+        setDocumentosFiltrados([]);
       } finally {
         setCarregando(false);
       }
