@@ -127,34 +127,16 @@ export function NovaLicitacao({ onLicitacaoAdded }: NovaLicitacaoProps) {
         const token = localStorage.getItem('accessToken');
         console.log("Token de autenticação:", token ? "Presente" : "Ausente");
         
-        // Buscar todos os documentos (sem filtro)
-        const todosDocumentos = await fetchDocuments();
-        console.log("Documentos carregados:", todosDocumentos ? todosDocumentos.length : 0);
+        // Buscar documentos com a tag "licitacao"
+        const docsLicitacaoApi = await fetchDocuments({ tagNome: 'licitacao' });
+        console.log("Documentos com tag 'licitacao' carregados:", docsLicitacaoApi ? docsLicitacaoApi.length : 0);
         
-        if (todosDocumentos && todosDocumentos.length > 0) {
-          console.log("Exemplo de documento:", todosDocumentos[0]);
-          
-          // Filtrar documentos que contêm a tag "licitacao" (podendo ter outras também)
-          const docsLicitacao = todosDocumentos.filter((doc: DocumentType) => {
-            // Verificar se categorias é um array
-            if (Array.isArray(doc.categorias)) {
-              return doc.categorias.includes('licitacao');
-            }
-            
-            // Verificar no campo categoria (string separada por vírgulas)
-            if (typeof doc.categoria === 'string') {
-              const categorias = doc.categoria.split(',').map((c: string) => c.trim());
-              return categorias.includes('licitacao');
-            }
-            
-            return false;
-          });
-          
-          console.log("Documentos com tag licitacao:", docsLicitacao.length);
-          setDocumentos(docsLicitacao);
-          setDocumentosFiltrados(docsLicitacao);
+        if (docsLicitacaoApi && docsLicitacaoApi.length > 0) {
+          // A API já retorna os documentos filtrados pela tag "licitacao"
+          setDocumentos(docsLicitacaoApi);
+          setDocumentosFiltrados(docsLicitacaoApi);
         } else {
-          console.log("Nenhum documento retornado da API");
+          console.log("Nenhum documento com tag 'licitacao' retornado da API");
           setDocumentos([]);
           setDocumentosFiltrados([]);
         }

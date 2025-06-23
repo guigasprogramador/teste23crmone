@@ -249,18 +249,19 @@ export default function DocumentosPage() {
       nome: doc.nome || "",
       tipo: doc.tipo || "",
       formato: doc.formato || "",
-      categoria: doc.categoria || "",
-      categoriaId: categoriaId,
-      licitacao: doc.licitacao_id ? `Licitação ${doc.licitacao_id}` : "",
-      licitacaoId: doc.licitacao_id || "",
-      licitacao_id: doc.licitacao_id,
-      dataUpload: dataFormatada,
-      uploadPor: doc.criado_por || "",
-      resumo: doc.descricao || "",
-      arquivo_path: doc.arquivo_path,
+      categoria: doc.categoria || "", // This should be doc.categoriaLegado if using that from API
+      categoriaId: categoriaId, // This is derived from doc.categoria (or doc.categoriaLegado)
+      licitacao: doc.licitacaoId ? `Licitação ${doc.licitacaoId}` : "", // Use doc.licitacaoId from DocumentType
+      licitacaoId: doc.licitacaoId || "", // Use doc.licitacaoId from DocumentType
+      // licitacao_id: doc.licitacao_id, // Redundant if using doc.licitacaoId
+      dataUpload: dataFormatada, // This is dataCriacao
+      uploadPor: doc.criadoPorNome || doc.criadoPor || "", // Prefer criadoPorNome
+      resumo: doc.descricao || "", // Maps to DocumentType.descricao
+      url: doc.urlDocumento || "", // Map urlDocumento to url
+      arquivo_path: doc.arquivoPath || doc.arquivo_path, // Map arquivoPath from DocumentType
       tamanho: tamanhoFormatado,
-      dataValidade: doc.data_validade ? format(new Date(doc.data_validade), "dd/MM/yyyy", { locale: ptBR }) : undefined,
-      descricao: doc.descricao || "",
+      dataValidade: doc.dataValidade, // Already formatted as DD/MM/YYYY from API or undefined
+      descricao: doc.descricao || "", // Duplicate of resumo?
     }
   }
 
@@ -384,15 +385,12 @@ export default function DocumentosPage() {
   const handleDownload = (documento: Documento, e: React.MouseEvent) => {
     e.stopPropagation()
     
-    // Nova URL de download para a API
-    const newDownloadUrl = `/api/documentos/doc/${documento.id}/download`;
-    
-    if (documento.id) { // Garante que o ID do documento existe
-      window.open(newDownloadUrl, '_blank');
+    if (documento.url) { // Check if the Cloudinary URL exists
+      window.open(documento.url, '_blank');
     } else {
       toast({
         title: "Erro ao baixar documento",
-        description: "ID do documento não encontrado ou inválido.",
+        description: "URL do documento não encontrada.",
         variant: "destructive"
       })
     }

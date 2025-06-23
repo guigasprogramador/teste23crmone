@@ -1,24 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+// import fs from 'fs'; // REMOVED
+// import path from 'path'; // REMOVED
 import { v4 as uuidv4 } from 'uuid';
 import { getDbConnection } from '@/lib/mysql/client';
-import { verifyJwtToken } from '@/lib/auth/jwt'; // Assuming this function exists and works
+import { verifyJwtToken } from '@/lib/auth/jwt';
+import { cloudinary } from '@/lib/cloudinary/config'; // ADDED
 
-const UPLOAD_DIR = path.join(process.cwd(), 'public/uploads/documents');
+// const UPLOAD_DIR = path.join(process.cwd(), 'public/uploads/documents'); // REMOVED
 
 // Helper function to format document for response (adjust based on actual needs)
 const formatDocumentForResponse = async (connection: any, documentId: string) => {
   // This query needs to join with users, licitacoes, and aggregate tags
-  // Placeholder - adapt this query to your actual schema and needs
   const [rows]: any = await connection.execute(
     `SELECT
       d.*,
-      u.nome_completo as criado_por_nome,
+      u.name as criado_por_nome,  -- Changed from u.nome_completo
       l.titulo as licitacao_titulo,
       GROUP_CONCAT(t.nome) as tags_concatenadas
     FROM documentos d
-    LEFT JOIN usuarios u ON d.criado_por = u.id
+    LEFT JOIN users u ON d.criado_por = u.id -- Changed from usuarios to users
     LEFT JOIN licitacoes l ON d.licitacao_id = l.id
     LEFT JOIN documentos_tags dt ON d.id = dt.documento_id
     LEFT JOIN tags t ON dt.tag_id = t.id
@@ -33,10 +33,21 @@ const formatDocumentForResponse = async (connection: any, documentId: string) =>
       tags: doc.tags_concatenadas ? doc.tags_concatenadas.split(',') : [],
       data_criacao: new Date(doc.data_criacao).toISOString(),
       data_atualizacao: new Date(doc.data_atualizacao).toISOString(),
-      data_validade: doc.data_validade ? new Date(doc.data_validade).toISOString().split('T')[0] : null, // Format as YYYY-MM-DD
+      data_validade: doc.data_validade ? new Date(doc.data_validade).toISOString().split('T')[0] : null,
     };
   }
   return null;
+};
+
+// Helper function for Cloudinary upload
+const uploadToCloudinary = (buffer: Buffer, options: object): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
+      if (error) return reject(error);
+      resolve(result);
+    });
+    stream.end(buffer);
+  });
 };
 
 export async function POST(request: NextRequest) {
@@ -46,14 +57,13 @@ export async function POST(request: NextRequest) {
     const authHeader = request.headers.get('authorization');
 
     if (!token && authHeader && authHeader.startsWith('Bearer ')) {
-      console.log("Token not found in cookie, attempting to use Authorization header for POST /api/documentos/doc/upload");
       token = authHeader.split(' ')[1];
     }
 
     if (!token) {
       return NextResponse.json({ error: 'Não autorizado: token não fornecido' }, { status: 401 });
     }
-    const tokenPayload = await verifyJwtToken(token); // Assuming verifyJwtToken takes a token string
+    const tokenPayload = await verifyJwtToken(token);
     if (!tokenPayload || !tokenPayload.userId) {
       return NextResponse.json({ error: 'Não autorizado ou token inválido' }, { status: 401 });
     }
@@ -64,10 +74,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Requisição deve ser multipart/form-data' }, { status: 400 });
     }
 
-    // Ensure UPLOAD_DIR exists
-    if (!fs.existsSync(UPLOAD_DIR)) {
-      fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-    }
+    // REMOVED: UPLOAD_DIR logic
+    // if (!fs.existsSync(UPLOAD_DIR)) {
+    //   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    // }
 
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
@@ -76,51 +86,60 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Nenhum arquivo enviado' }, { status: 400 });
     }
 
-    // --- File Processing ---
     const fileBuffer = Buffer.from(await file.arrayBuffer());
-    const fileExt = path.extname(file.name);
     const originalFilename = file.name;
-    const storedFilename = `${uuidv4()}${fileExt}`;
-    const fullPath = path.join(UPLOAD_DIR, storedFilename);
-    const relativePathForDb = path.join('uploads/documents', storedFilename); // Relative to 'public/'
+    // Extract file extension for Cloudinary's format detection or specific format setting
+    const fileExt = originalFilename.substring(originalFilename.lastIndexOf('.') + 1) || '';
 
-    // Save file to disk
-    fs.writeFileSync(fullPath, fileBuffer);
+
+    // --- Cloudinary Upload ---
+    const cloudinaryPublicId = uuidv4();
+    const cloudinaryResult = await uploadToCloudinary(fileBuffer, {
+      folder: "crm_documents",
+      public_id: cloudinaryPublicId, // Use the generated UUID for public_id
+      resource_type: "auto", // Let Cloudinary detect resource type
+      original_filename: originalFilename // Optional: pass original filename
+    });
+
+    if (!cloudinaryResult || !cloudinaryResult.secure_url) {
+      // Note: If a transaction was started before this, it should be rolled back.
+      // However, transaction normally starts just before DB operations.
+      throw new Error('Cloudinary upload failed or did not return a secure_url.');
+    }
 
     // --- Database Operations ---
     connection = await getDbConnection();
     await connection.beginTransaction();
 
     // --- Document Metadata ---
-    const newDocumentId = uuidv4();
+    const newDocumentId = uuidv4(); // This ID is for the database record
     const nome = formData.get('nome') as string || originalFilename;
     const tipo = formData.get('tipo') as string;
     const licitacaoId = formData.get('licitacaoId') as string | null;
     const descricao = formData.get('descricao') as string | null;
     const numeroDocumento = formData.get('numeroDocumento') as string | null;
-    let dataValidade = formData.get('dataValidade') as string | null; // Expects YYYY-MM-DD
-    const categoriaForm = formData.get('categoria') as string | null; // Changed from categoriaLegado, and from formData
-    const tagsString = formData.get('tags') as string | null; // Expects comma-separated string e.g., "tag1,tag2"
+    let dataValidade = formData.get('dataValidade') as string | null;
+    const categoriaForm = formData.get('categoria') as string | null;
+    const tagsString = formData.get('tags') as string | null;
 
     if (!tipo) {
       await connection.rollback(); // Rollback before returning error
-      fs.unlinkSync(fullPath); // Delete uploaded file if metadata is bad
+      // No local file to unlink anymore if Cloudinary upload was first and failed,
+      // or if Cloudinary succeeded but this validation failed.
+      // Consider deleting from Cloudinary if this validation fails *after* successful Cloudinary upload.
       return NextResponse.json({ error: 'Campo "tipo" é obrigatório.' }, { status: 400 });
     }
     
-    // Basic date validation for dataValidade
     if (dataValidade && !/^\d{4}-\d{2}-\d{2}$/.test(dataValidade)) {
-        // Try to parse if DD/MM/YYYY
         if (/^\d{2}\/\d{2}\/\d{4}$/.test(dataValidade)) {
             const [day, month, year] = dataValidade.split('/');
-            dataValidade = `${year}-${month}-${day}`;
+            dataValidade = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
         } else {
-            await connection.rollback();
-            fs.unlinkSync(fullPath);
+            if (connection) await connection.rollback(); // Ensure rollback if connection was established
+            // Consider deleting from Cloudinary if this validation fails *after* successful Cloudinary upload.
             return NextResponse.json({ error: 'Formato de dataValidade inválido. Use YYYY-MM-DD.' }, { status: 400 });
         }
     }
-
 
     const documentoDb = {
       id: newDocumentId,
@@ -128,36 +147,25 @@ export async function POST(request: NextRequest) {
       tipo: tipo,
       licitacao_id: licitacaoId || null,
       criado_por: userIdFromToken,
-      arquivo_path: relativePathForDb,
-      url_documento: `/api/documentos/doc/${newDocumentId}/download`,
-      formato: fileExt ? fileExt.substring(1) : null,
-      tamanho: fileBuffer.length,
+      arquivo_path: cloudinaryResult.public_id, // Store Cloudinary public_id
+      url_documento: cloudinaryResult.secure_url, // Store Cloudinary secure_url
+      formato: cloudinaryResult.format || fileExt, // Use format from Cloudinary or original extension
+      tamanho: cloudinaryResult.bytes || fileBuffer.length, // Use size from Cloudinary or buffer length
       status: 'ativo',
       descricao: descricao || null,
       numero_documento: numeroDocumento || null,
       data_validade: dataValidade ? new Date(dataValidade) : null,
-      categoria: categoriaForm || null, // Changed key to categoria
-      // data_criacao and data_atualizacao will use default MySQL CURRENT_TIMESTAMP
+      categoria: categoriaForm || null,
     };
 
     await connection.execute(
       `INSERT INTO documentos (id, nome, tipo, licitacao_id, criado_por, arquivo_path, url_documento, formato, tamanho, status, descricao, numero_documento, data_validade, categoria)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, // Changed column to categoria
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        documentoDb.id,
-        documentoDb.nome,
-        documentoDb.tipo,
-        documentoDb.licitacao_id,
-        documentoDb.criado_por,
-        documentoDb.arquivo_path,
-        documentoDb.url_documento,
-        documentoDb.formato,
-        documentoDb.tamanho,
-        documentoDb.status,
-        documentoDb.descricao,
-        documentoDb.numero_documento,
-        documentoDb.data_validade,
-        documentoDb.categoria, // Changed to use categoria
+        documentoDb.id, documentoDb.nome, documentoDb.tipo, documentoDb.licitacao_id,
+        documentoDb.criado_por, documentoDb.arquivo_path, documentoDb.url_documento,
+        documentoDb.formato, documentoDb.tamanho, documentoDb.status, documentoDb.descricao,
+        documentoDb.numero_documento, documentoDb.data_validade, documentoDb.categoria,
       ]
     );
 
@@ -166,23 +174,20 @@ export async function POST(request: NextRequest) {
       const tagNames = tagsString.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
       if (tagNames.length > 0) {
         for (const tagName of tagNames) {
-          // Find or create tag
           let [[tag]]: any = await connection.execute('SELECT id FROM tags WHERE nome = ?', [tagName]);
           let tagId;
           if (!tag) {
             tagId = uuidv4();
-            await connection.execute('INSERT INTO tags (id, nome) VALUES (?, ?)', [tagId, tagName]);
+            await connection.execute('INSERT INTO tags (id, nome, created_at, updated_at) VALUES (?, ?, NOW(), NOW())', [tagId, tagName]);
           } else {
             tagId = tag.id;
           }
-          // Link document to tag
           await connection.execute('INSERT INTO documentos_tags (documento_id, tag_id) VALUES (?, ?)', [newDocumentId, tagId]);
         }
       }
     }
 
     await connection.commit();
-
     const formattedDocument = await formatDocumentForResponse(connection, newDocumentId);
 
     return NextResponse.json({
@@ -193,21 +198,20 @@ export async function POST(request: NextRequest) {
 
   } catch (error: any) {
     console.error('Erro no upload:', error);
-    if (connection) {
+    if (connection) { // Check if connection was established before trying to rollback
       await connection.rollback();
     }
-    // Attempt to delete file if it was saved and an error occurred later
-    // This requires fullPath to be defined if file processing stage was reached
-    // const fullPath = path.join(UPLOAD_DIR, storedFilename); // Need storedFilename from above
-    // if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
-
+    // If Cloudinary upload failed, it would be caught here.
+    // If DB operation failed after successful Cloudinary upload, the file remains in Cloudinary.
+    // Implementing a Cloudinary delete here on DB error is more complex and depends on requirements.
 
     if (error.message.includes('Token inválido') || error.message.includes('Não autorizado')) {
         return NextResponse.json({ error: 'Não autorizado: Token inválido ou ausente.' }, { status: 401 });
     }
-    if (error.code === 'ER_DUP_ENTRY') {
+    if (error.code === 'ER_DUP_ENTRY') { // MySQL duplicate entry
         return NextResponse.json({ error: 'Erro de duplicidade ao inserir dados.' }, { status: 409 });
     }
+    // For Cloudinary specific errors, one might check error.http_code or error.message
     return NextResponse.json({ error: 'Erro interno do servidor', details: error.message }, { status: 500 });
   } finally {
     if (connection) {
