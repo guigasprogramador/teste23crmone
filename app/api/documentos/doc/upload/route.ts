@@ -40,9 +40,22 @@ const formatDocumentForResponse = async (connection: any, documentId: string) =>
 };
 
 // Helper function for Cloudinary upload
-const uploadToCloudinary = (buffer: Buffer, options: object): Promise<any> => {
+interface CloudinaryUploadStreamOptions {
+  folder: string;
+  public_id: string;
+  resource_type: string;
+  original_filename?: string;
+  access_mode?: string;
+}
+
+const uploadToCloudinary = (buffer: Buffer, options: CloudinaryUploadStreamOptions): Promise<any> => {
   return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
+    // Add access_mode: "public" to the options for upload_stream
+    const streamOptions: CloudinaryUploadStreamOptions = {
+      ...options,
+      access_mode: "public"
+    };
+    const stream = cloudinary.uploader.upload_stream(streamOptions, (error, result) => {
       if (error) return reject(error);
       resolve(result);
     });

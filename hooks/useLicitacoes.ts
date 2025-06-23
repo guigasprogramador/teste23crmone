@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '@/hooks/useAuth'; // ADDED
 
 // Interface para Documento (simplificada para o contexto da licitação)
 export interface DocumentoSimplificado {
   id: string;
   nome: string;
   tipo?: string;
-  url?: string; // ou url_documento
-  arquivo?: string; // ou arquivo_path
+  url?: string;
+  arquivo?: string;
   tags?: string[];
-  // Outros campos relevantes do documento podem ser adicionados aqui
   dataCriacao?: string;
   dataAtualizacao?: string;
 }
@@ -24,40 +24,39 @@ export interface ResponsavelInfo {
 export interface Licitacao {
   id: string;
   titulo: string;
-  status: string; // Ou um enum LicitacaoStatus se definido
+  status: string;
   modalidade?: string;
-  numeroProcesso?: string; // numero_processo
-  dataAbertura?: string; // Formatado como DD/MM/YYYY
-  dataLimiteProposta?: string; // Formatado como DD/MM/YYYY
-  dataPublicacao?: string; // Formatado como DD/MM/YYYY
-  dataJulgamento?: string; // Formatado como DD/MM/YYYY
-  orgao?: string; // nome do órgão
-  orgaoId?: string; // orgao_id
-  valorEstimado?: string; // Formatado como "R$ X.XXX,XX"
-  _valorEstimadoNumerico?: number; // Valor numérico para cálculos
+  numeroProcesso?: string;
+  dataAbertura?: string;
+  dataLimiteProposta?: string;
+  dataPublicacao?: string;
+  dataJulgamento?: string;
+  orgao?: string;
+  orgaoId?: string;
+  valorEstimado?: string;
+  _valorEstimadoNumerico?: number;
   objeto?: string;
   edital?: string;
-  numeroEdital?: string; // numero_edital
-  responsavel?: string; // Nome do responsável principal
-  responsavelId?: string; // responsavel_id (FK para users)
-  responsaveis?: ResponsavelInfo[]; // Lista de múltiplos responsáveis
+  numeroEdital?: string;
+  responsavel?: string;
+  responsavelId?: string;
+  responsaveis?: ResponsavelInfo[];
   prazo?: string;
   urlLicitacao?: string;
   urlEdital?: string;
   descricao?: string;
   formaPagamento?: string;
   obsFinanceiras?: string;
-  tipo?: string; // 'produto' ou 'servico'
+  tipo?: string;
   tipoFaturamento?: string;
   margemLucro?: number;
   contatoNome?: string;
   contatoEmail?: string;
   contatoTelefone?: string;
   posicaoKanban?: number;
-  dataCriacao?: string; // created_at ou data_criacao
-  dataAtualizacao?: string; // updated_at ou data_atualizacao
+  dataCriacao?: string;
+  dataAtualizacao?: string;
   documentos?: DocumentoSimplificado[];
-  // Adicionar quaisquer outros campos que a API retorna
 }
 
 
@@ -65,256 +64,280 @@ export function useLicitacoes() {
   const [licitacoes, setLicitacoes] = useState<Licitacao[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
-  // Cache local para os dados
+  const auth = useAuth(); // ADDED
+
+  // Cache local para os dados (simple version)
   const [cacheTimestamp, setCacheTimestamp] = useState<number | null>(null);
   
-  // TODO: Remove static data and fallback for production
-  // Dados estáticos para carregamento rápido
-  const licitacoesEstaticas: Licitacao[] = [
-    {
-      id: "lic-001",
-      modalidade: "Pregão Eletrônico",
-      numeroProcesso: "001/2023", // Ajustado para numeroProcesso
-      objeto: "Aquisição de equipamentos de informática",
-      status: "ativo",
-      titulo: "Licitação de TI Exemplo 1"
-    },
-    {
-      id: "lic-002",
-      modalidade: "Concorrência",
-      numeroProcesso: "002/2023", // Ajustado para numeroProcesso
-      objeto: "Reforma de prédio público",
-      status: "ativo",
-      titulo: "Licitação de Obras Exemplo 2"
-    },
-    // ... mais exemplos se necessário, seguindo a nova interface Licitacao
-  ];
+  const licitacoesEstaticas: Licitacao[] = [ /* ... static data ... */ ];
 
-  // Buscar todas as licitações
+
   const fetchLicitacoes = useCallback(async () => {
-    // Verificar se temos dados em cache recentes (menos de 5 minutos)
     const agora = Date.now();
     const cacheValido = cacheTimestamp && (agora - cacheTimestamp < 5 * 60 * 1000);
-    
     if (cacheValido && licitacoes.length > 0) {
-      console.log('Usando dados em cache...');
       return licitacoes;
     }
-    
-    // Mostrar dados estáticos imediatamente para melhorar a experiência do usuário
-    if (!cacheValido && licitacoes.length === 0) {
-      console.log('Usando dados estáticos iniciais...');
-      setLicitacoes(licitacoesEstaticas);
-    }
-    
+    // No immediate static data set here, will be fallback in error cases
+
     setLoading(true);
     setError(null);
+    const { refreshToken, logout } = auth;
+
+    const makeRequest = async () => {
+      const response = await fetch('/api/licitacoes', {
+        method: 'GET',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) {
+        if (response.status === 401) throw { status: 401, data: await response.json().catch(() => ({error: `Unauthorized: ${response.statusText}`})) };
+        throw new Error(`API Error: ${response.status} ${await response.text().catch(()=>response.statusText)}`);
+      }
+      return response.json();
+    };
 
     try {
-      console.log('Buscando licitações da API...');
-      
-      // Tentar buscar da API em paralelo
-      try {
-        // const token = getAuthToken(); // REMOVED
-        const response = await fetch('/api/licitacoes', {
-          method: 'GET',
-          credentials: 'include', // ADDED
-          headers: {
-            // 'Authorization': token ? `Bearer ${token}` : '', // REMOVED
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          
-          // Verificar formato da resposta da API
-          console.log('Resposta da API:', data);
-          
-          // A linha const data = await response.json(); foi removida daqui por ser redundante
-
-          // Verificar formato da resposta da API
-          console.log('Resposta da API (fetchLicitacoes):', data);
-
+      const data = await makeRequest();
+      if (Array.isArray(data)) {
+        setLicitacoes(data);
+        setCacheTimestamp(Date.now());
+        return data;
+      } else {
+        console.warn('API (fetchLicitacoes) retornou formato inesperado.');
+        setLicitacoes(licitacoesEstaticas); // Fallback
+        setCacheTimestamp(Date.now());
+        return licitacoesEstaticas;
+      }
+    } catch (err: any) {
+      if (err && err.status === 401) {
+        console.log("useLicitacoes: 401 detected, attempting refresh for fetchLicitacoes");
+        try {
+          await refreshToken();
+          console.log("useLicitacoes: Token refreshed, retrying fetchLicitacoes");
+          const data = await makeRequest(); // Retry
           if (Array.isArray(data)) {
             setLicitacoes(data);
-            setCacheTimestamp(Date.now()); // Atualiza o timestamp do cache
+            setCacheTimestamp(Date.now());
             return data;
           } else {
-            // Se a API não retornar um array, pode ser um erro ou formato inesperado
-            console.warn('API (fetchLicitacoes) retornou formato inesperado. Usando dados estáticos para desenvolvimento');
-            if (licitacoes.length === 0) { // Só define estáticos se não houver nada
-              setLicitacoes(licitacoesEstaticas);
-              setCacheTimestamp(Date.now()); // Cache dos dados estáticos
-            }
-            return licitacoes.length > 0 ? licitacoes : licitacoesEstaticas; // Retorna o que tiver ou estáticos
+             setLicitacoes(licitacoesEstaticas); return licitacoesEstaticas;
           }
-        } else {
-          // Erro na resposta da API
-          const errorData = await response.text();
-          console.warn(`Erro na API (fetchLicitacoes) ${response.status}: ${errorData}. Usando dados estáticos para desenvolvimento`);
-          if (licitacoes.length === 0) {
-            setLicitacoes(licitacoesEstaticas);
-            setCacheTimestamp(Date.now());
-          }
-          return licitacoes.length > 0 ? licitacoes : licitacoesEstaticas;
+        } catch (refreshError: any) {
+          console.error("useLicitacoes: Token refresh failed for fetchLicitacoes", refreshError);
+          logout();
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          setLicitacoes(licitacoesEstaticas); return licitacoesEstaticas;
         }
-      } catch (apiError: any) {
-        console.error('Erro ao acessar API (fetchLicitacoes):', apiError.message);
-        console.warn('Usando dados estáticos para desenvolvimento devido a falha na API.');
-        if (licitacoes.length === 0) {
-          setLicitacoes(licitacoesEstaticas);
-          setCacheTimestamp(Date.now());
-        }
-        return licitacoes.length > 0 ? licitacoes : licitacoesEstaticas;
+      } else {
+        console.error('Erro ao buscar licitações:', err);
+        setError(err.message || "Erro desconhecido.");
+        setLicitacoes(licitacoesEstaticas); return licitacoesEstaticas;
       }
-    } catch (err: any) { // Este catch é mais genérico, para erros não esperados
-      console.error('Erro geral ao buscar licitações:', err);
-      setError(err.message);
-      return licitacoes.length > 0 ? licitacoes : licitacoesEstaticas; // Retorna o que tiver
     } finally {
       setLoading(false);
     }
-  }, [licitacoes, cacheTimestamp]);
+  }, [auth, licitacoes, cacheTimestamp]); // licitacoesEstaticas is stable
 
-  // Carregar dados iniciais na montagem do componente
   useEffect(() => {
-    if (licitacoes.length === 0) {
-      // Carregar dados estáticos imediatamente para UX rápida
-      setLicitacoes(licitacoesEstaticas);
-      // Então buscar dados da API
-      fetchLicitacoes();
-    }
-  }, [fetchLicitacoes, licitacoes.length]);
+    // Initial load, but fetchLicitacoes itself handles initial static data display if cache is empty
+    fetchLicitacoes();
+  }, [fetchLicitacoes]);
 
-  // Buscar uma licitação específica pelo ID
   const fetchLicitacaoById = useCallback(async (id: string) => {
     setLoading(true);
     setError(null);
+    const { refreshToken, logout } = auth;
 
-    try {
-      // const token = getAuthToken(); // REMOVED
-      // if (!token) { // REMOVED
-      //   throw new Error('Não autenticado');
-      // }
-
+    const makeRequest = async () => {
       const response = await fetch(`/api/licitacoes/${id}`, {
         method: 'GET',
-        credentials: 'include', // ADDED
-        headers: {
-          // 'Authorization': `Bearer ${token}`, // REMOVED
-          'Content-Type': 'application/json'
-        }
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
       });
-
       if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Erro ao buscar licitação: ${response.status} ${errorData}`);
+        if (response.status === 401) throw { status: 401, data: await response.json().catch(() => ({error: `Unauthorized: ${response.statusText}`})) };
+        throw new Error(`API Error: ${response.status} ${await response.text().catch(()=>response.statusText)}`);
       }
+      return response.json();
+    };
 
-      const data = await response.json();
-      return data; // API agora retorna o objeto licitação diretamente
+    try {
+      const data = await makeRequest();
+      return data;
     } catch (err: any) {
-      console.error('Erro ao buscar licitação por ID:', err);
-      setError(err.message);
-      return null;
+      if (err && err.status === 401) {
+        console.log("useLicitacoes: 401 detected, attempting refresh for fetchLicitacaoById");
+        try {
+          await refreshToken();
+          console.log("useLicitacoes: Token refreshed, retrying fetchLicitacaoById");
+          return await makeRequest(); // Retry
+        } catch (refreshError: any) {
+          console.error("useLicitacoes: Token refresh failed for fetchLicitacaoById", refreshError);
+          logout();
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          return null;
+        }
+      } else {
+        console.error('Erro ao buscar licitação por ID:', err);
+        setError(err.message || "Erro desconhecido.");
+        return null;
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [auth]);
 
-  // Criar nova licitação
   const createLicitacao = useCallback(async (licitacaoData: Partial<Licitacao>): Promise<Licitacao | null> => {
     setLoading(true);
     setError(null);
-    try {
-      // const token = getAuthToken(); // REMOVED
+    const { refreshToken, logout } = auth;
+
+    const makeRequest = async (payload: Partial<Licitacao>) => {
       const response = await fetch('/api/licitacoes', {
         method: 'POST',
-        credentials: 'include', // ADDED
-        headers: {
-          'Content-Type': 'application/json',
-          // 'Authorization': token ? `Bearer ${token}` : '', // REMOVED
-        },
-        body: JSON.stringify(licitacaoData),
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
-      const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || 'Erro ao criar licitação');
+        if (response.status === 401) throw { status: 401, data: await response.json().catch(() => ({error: `Unauthorized: ${response.statusText}`})) };
+        const errorData = await response.json().catch(() => ({ error: `API Error: ${response.status} ${response.statusText}` }));
+        throw new Error(errorData.error || `Erro ao criar licitação: ${response.status}`);
       }
-      setLicitacoes((prev) => [data, ...prev]); // Adiciona no início da lista
-      setCacheTimestamp(null); // Invalidar cache da lista
+      return response.json();
+    };
+
+    try {
+      const data = await makeRequest(licitacaoData);
+      setLicitacoes((prev) => [data, ...prev]);
+      setCacheTimestamp(null);
       return data;
     } catch (err: any) {
-      console.error('Erro ao criar licitação:', err);
-      setError(err.message);
-      return null;
+      if (err && err.status === 401) {
+         console.log("useLicitacoes: 401 detected, attempting refresh for createLicitacao");
+        try {
+          await refreshToken();
+          console.log("useLicitacoes: Token refreshed, retrying createLicitacao");
+          const data = await makeRequest(licitacaoData); // Retry
+          setLicitacoes((prev) => [data, ...prev]);
+          setCacheTimestamp(null);
+          return data;
+        } catch (refreshError: any) {
+          console.error("useLicitacoes: Token refresh failed for createLicitacao", refreshError);
+          logout();
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          return null;
+        }
+      } else {
+        console.error('Erro ao criar licitação:', err);
+        setError(err.message || "Erro desconhecido.");
+        return null;
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [auth]);
 
-  // Atualizar licitação existente
   const updateLicitacao = useCallback(async (id: string, licitacaoData: Partial<Licitacao>): Promise<Licitacao | null> => {
     setLoading(true);
     setError(null);
-    try {
-      // const token = getAuthToken(); // REMOVED
+    const { refreshToken, logout } = auth;
+
+    const makeRequest = async (payload: Partial<Licitacao>) => {
       const response = await fetch(`/api/licitacoes/${id}`, {
         method: 'PUT',
-        credentials: 'include', // ADDED
-        headers: {
-          'Content-Type': 'application/json',
-          // 'Authorization': token ? `Bearer ${token}` : '', // REMOVED
-        },
-        body: JSON.stringify(licitacaoData),
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
-      const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || 'Erro ao atualizar licitação');
+        if (response.status === 401) throw { status: 401, data: await response.json().catch(() => ({error: `Unauthorized: ${response.statusText}`})) };
+        const errorData = await response.json().catch(() => ({ error: `API Error: ${response.status} ${response.statusText}` }));
+        throw new Error(errorData.error || `Erro ao atualizar licitação: ${response.status}`);
       }
+      return response.json();
+    };
+
+    try {
+      const data = await makeRequest(licitacaoData);
       setLicitacoes((prev) => prev.map(l => l.id === id ? data : l));
-      setCacheTimestamp(null); // Invalidar cache da lista
+      setCacheTimestamp(null);
       return data;
     } catch (err: any) {
-      console.error('Erro ao atualizar licitação:', err);
-      setError(err.message);
-      return null;
+       if (err && err.status === 401) {
+        console.log("useLicitacoes: 401 detected, attempting refresh for updateLicitacao");
+        try {
+          await refreshToken();
+          console.log("useLicitacoes: Token refreshed, retrying updateLicitacao");
+          const data = await makeRequest(licitacaoData); // Retry
+          setLicitacoes((prev) => prev.map(l => l.id === id ? data : l));
+          setCacheTimestamp(null);
+          return data;
+        } catch (refreshError: any) {
+          console.error("useLicitacoes: Token refresh failed for updateLicitacao", refreshError);
+          logout();
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          return null;
+        }
+      } else {
+        console.error('Erro ao atualizar licitação:', err);
+        setError(err.message || "Erro desconhecido.");
+        return null;
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [auth]);
 
-  // Excluir licitação
   const deleteLicitacao = useCallback(async (id: string): Promise<boolean> => {
     setLoading(true);
     setError(null);
-    try {
-      // const token = getAuthToken(); // REMOVED
+    const { refreshToken, logout } = auth;
+
+    const makeRequest = async () => {
       const response = await fetch(`/api/licitacoes/${id}`, {
         method: 'DELETE',
-        credentials: 'include', // ADDED
-        headers: {
-          // 'Authorization': token ? `Bearer ${token}` : '', // REMOVED
-        },
+        credentials: 'include',
       });
       if (!response.ok) {
-        const data = await response.json().catch(() => null);
-        throw new Error(data?.error || `Erro ao excluir licitação: ${response.statusText}`);
+        if (response.status === 401) throw { status: 401, data: await response.json().catch(() => ({error: `Unauthorized: ${response.statusText}`})) };
+        const errorData = await response.json().catch(() => ({ error: `API Error: ${response.status} ${response.statusText}` }));
+        throw new Error(errorData.error || `Erro ao excluir licitação: ${response.status}`);
       }
+      try { return await response.json(); } catch(e) { return {success: true}; } // Handle empty response for DELETE
+    };
+
+    try {
+      await makeRequest();
       setLicitacoes((prev) => prev.filter(l => l.id !== id));
-      setCacheTimestamp(null); // Invalidar cache da lista
+      setCacheTimestamp(null);
       return true;
     } catch (err: any) {
-      console.error('Erro ao excluir licitação:', err);
-      setError(err.message);
-      return false;
+      if (err && err.status === 401) {
+        console.log("useLicitacoes: 401 detected, attempting refresh for deleteLicitacao");
+        try {
+          await refreshToken();
+          console.log("useLicitacoes: Token refreshed, retrying deleteLicitacao");
+          await makeRequest(); // Retry
+          setLicitacoes((prev) => prev.filter(l => l.id !== id));
+          setCacheTimestamp(null);
+          return true;
+        } catch (refreshError: any) {
+          console.error("useLicitacoes: Token refresh failed for deleteLicitacao", refreshError);
+          logout();
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          return false;
+        }
+      } else {
+        console.error('Erro ao excluir licitação:', err);
+        setError(err.message || "Erro desconhecido.");
+        return false;
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
-
+  }, [auth]);
 
   return {
     licitacoes,
