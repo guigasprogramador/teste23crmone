@@ -16,13 +16,23 @@ import { format } from "date-fns"
 import { ptBR } from "date-fns/locale"
 import { cn } from "@/lib/utils"
 
+interface ClienteParaSelect {
+  id: string;
+  nome: string;
+}
+
+interface ResponsavelParaSelect {
+  id: string;
+  nome: string;
+}
+
 interface EditarOportunidadeProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   oportunidade: Oportunidade
   onOportunidadeUpdated: (id: string, data: Partial<Oportunidade>) => Promise<void>
-  clientes?: string[]
-  responsaveis?: string[]
+  clientes?: ClienteParaSelect[]
+  responsaveis?: ResponsavelParaSelect[]
 }
 
 export function EditarOportunidade({ 
@@ -30,14 +40,14 @@ export function EditarOportunidade({
   onOpenChange, 
   oportunidade,
   onOportunidadeUpdated,
-  clientes = [],
-  responsaveis = []
+  clientes = [], // Default to empty array if not provided
+  responsaveis = [] // Default to empty array if not provided
 }: EditarOportunidadeProps) {
-  const [formData, setFormData] = useState<Partial<Oportunidade>>({
+  const [formData, setFormData] = useState<Partial<Oportunidade & { clienteId?: string; responsavelId?: string }>>({
     titulo: "",
-    cliente: "",
+    clienteId: undefined,
     valor: "",
-    responsavel: "",
+    responsavelId: undefined,
     prazo: "",
     status: "novo_lead" as OportunidadeStatus,
     descricao: "",
@@ -52,14 +62,17 @@ export function EditarOportunidade({
     if (oportunidade) {
       setFormData({
         titulo: oportunidade.titulo,
-        cliente: oportunidade.cliente,
+        clienteId: oportunidade.clienteId || undefined,
         valor: oportunidade.valor,
-        responsavel: oportunidade.responsavel,
+        responsavelId: oportunidade.responsavelId || undefined,
         prazo: oportunidade.prazo,
         status: oportunidade.status as OportunidadeStatus,
         descricao: oportunidade.descricao || "",
         tipo: oportunidade.tipo || "produto",
-        tipoFaturamento: oportunidade.tipoFaturamento || (oportunidade.tipo === "produto" ? "direto" : undefined)
+        // Ajuste para tipoFaturamento: se tipo não for produto, deve ser undefined
+        tipoFaturamento: oportunidade.tipo === "produto"
+          ? (oportunidade.tipoFaturamento || "direto")
+          : undefined
       })
       
       // Converter string de prazo para objeto Date
@@ -97,10 +110,10 @@ export function EditarOportunidade({
   const handleSubmit = async () => {
     try {
       // Validação básica
-      if (!formData.titulo || !formData.cliente) {
+      if (!formData.titulo || !formData.clienteId) {
         toast({
           title: "Erro",
-          description: "Título e cliente são obrigatórios",
+          description: "Título e Cliente são obrigatórios",
           variant: "destructive"
         })
         return
@@ -116,8 +129,10 @@ export function EditarOportunidade({
         return
       }
       
-      // Chamar função de atualização
-      await onOportunidadeUpdated(oportunidade.id, formData)
+      // Preparar payload, removendo cliente e responsavel (nomes) se não forem mais usados pela API
+      const { cliente, responsavel, ...payloadToSend } = formData;
+
+      await onOportunidadeUpdated(oportunidade.id, payloadToSend as Partial<Oportunidade>)
       
       // Fechar o modal após salvar
       onOpenChange(false)
@@ -162,63 +177,45 @@ export function EditarOportunidade({
           
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="cliente">
+              <Label htmlFor="clienteId">
                 Cliente *
               </Label>
-              {clientes.length > 0 ? (
-                <Select
-                  value={formData.cliente}
-                  onValueChange={(value) => handleChange("cliente", value)}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione o cliente" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {clientes.map((cliente) => (
-                      <SelectItem key={cliente} value={cliente}>
-                        {cliente}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input
-                  id="cliente"
-                  value={formData.cliente}
-                  onChange={(e) => handleChange("cliente", e.target.value)}
-                  placeholder="Nome do cliente"
-                />
-              )}
+              <Select
+                value={formData.clienteId || ""}
+                onValueChange={(value) => handleChange("clienteId", value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione o cliente" />
+                </SelectTrigger>
+                <SelectContent>
+                  {clientes.map((cliente) => (
+                    <SelectItem key={cliente.id} value={cliente.id}>
+                      {cliente.nome}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             
             <div className="space-y-2">
-              <Label htmlFor="responsavel">
+              <Label htmlFor="responsavelId">
                 Responsável
               </Label>
-              {responsaveis.length > 0 ? (
-                <Select
-                  value={formData.responsavel}
-                  onValueChange={(value) => handleChange("responsavel", value)}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione o responsável" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {responsaveis.map((responsavel) => (
-                      <SelectItem key={responsavel} value={responsavel}>
-                        {responsavel}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input
-                  id="responsavel"
-                  value={formData.responsavel}
-                  onChange={(e) => handleChange("responsavel", e.target.value)}
-                  placeholder="Nome do responsável"
-                />
-              )}
+              <Select
+                value={formData.responsavelId || ""}
+                onValueChange={(value) => handleChange("responsavelId", value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione o responsável" />
+                </SelectTrigger>
+                <SelectContent>
+                  {responsaveis.map((responsavel) => (
+                    <SelectItem key={responsavel.id} value={responsavel.id}>
+                      {responsavel.nome}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           

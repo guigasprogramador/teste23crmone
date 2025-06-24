@@ -28,20 +28,27 @@ import {
   Maximize2,
   Minimize2,
   MapPin,
-  Users
+  Users,
+  FileText as FileTextIcon, // Renomeado para evitar conflito com componente local se houver
+  Download as DownloadIcon,
+  ExternalLink as ExternalLinkIcon,
+  Loader2,
+  PlusCircle as PlusCircleIcon,
+  Trash2 as Trash2Icon,
+  Edit3 as Edit3Icon,
+  PackageIcon
 } from "lucide-react"
 import Link from "next/link"
-
-interface Reuniao {
-  id: string;
-  titulo: string;
-  data: string;
-  hora: string;
-  local: string;
-  participantes: string[];
-  concluida: boolean;
-  notas?: string;
-}
+import { useReunioes, Reuniao as ReuniaoType } from "@/hooks/comercial/use-reunioes"
+import { AgendarReuniao } from "@/components/comercial/agendar-reuniao"
+import { useNotas, Nota } from "@/hooks/comercial/use-notas";
+import { useAuth } from "@/hooks/useAuth";
+import { toast } from "@/components/ui/use-toast";
+import { useOportunidadeItens, OportunidadeItem } from "@/hooks/comercial/use-oportunidade-itens";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter
+} from "@/components/ui/dialog"; // DialogClose será adicionado se necessário para Dialog
+// AlertDialog já está importado de ui/alert-dialog
 
 interface Oportunidade {
   id: string
@@ -65,6 +72,7 @@ interface DetalhesOportunidadeProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onClienteClick?: (clienteNome: string) => void
+  onOportunidadeNeedsRefresh?: () => void;
 }
 
 const statusColors: Record<string, string> = {
@@ -103,56 +111,47 @@ export function DetalhesOportunidade({ oportunidade, open, onOpenChange, onClien
   const [isEditing, setIsEditing] = useState(false)
   const [formData, setFormData] = useState<Partial<Oportunidade>>({})
   const [isExpanded, setIsExpanded] = useState(false)
+  const [documentosOportunidade, setDocumentosOportunidade] = useState<any[]>([])
+  const [isLoadingDocumentos, setIsLoadingDocumentos] = useState(false)
+  const [showAgendarReuniaoModal, setShowAgendarReuniaoModal] = useState(false);
+  const [isAddingNota, setIsAddingNota] = useState(false);
 
-  // Dados fictícios para demonstração - Notas
-  const notas = [
-    {
-      id: 1,
-      autor: "Ana Silva",
-      data: "23/05/2023",
-      texto: "Cliente possui urgência na implementação do sistema devido ao prazo legal que se encerra em agosto.",
-    },
-    {
-      id: 2,
-      autor: oportunidade?.responsavel || "Responsável",
-      data: "27/05/2023",
-      texto: "Cliente solicitou detalhamento do módulo de relatórios e exportação de dados.",
-    },
-  ]
+  // Estados para CRUD de Itens da Oportunidade
+  const [showAddItemModal, setShowAddItemModal] = useState(false);
+  const [showEditItemModal, setShowEditItemModal] = useState(false);
+  const [showDeleteItemConfirm, setShowDeleteItemConfirm] = useState(false);
+  const initialNovoItemFormData: Partial<Omit<OportunidadeItem, 'id' | 'valorTotal' | 'createdAt' | 'updatedAt' | 'oportunidadeId'>> = {
+    itemNome: "", quantidade: 1, valorUnitario: 0, unidade: "", descricao: "", ordem: 0
+  };
+  const [novoItemFormData, setNovoItemFormData] = useState(initialNovoItemFormData);
+  const [editItemFormData, setEditItemFormData] = useState<OportunidadeItem | null>(null);
+  const [itemParaExcluirId, setItemParaExcluirId] = useState<string | null>(null);
+  const [isSubmittingItem, setIsSubmittingItem] = useState(false);
+
+  const { user } = useAuth();
+  const {
+    reunioes: reunioesDaOportunidade,
+    isLoading: isLoadingReunioes,
+    fetchReunioes
+  } = useReunioes(oportunidade?.id);
+
+  const {
+    notas: notasDaOportunidade,
+    isLoading: isLoadingNotas,
+    createNota,
+    fetchNotas
+  } = useNotas(oportunidade?.id);
+
+  const {
+    itens: itensDaOportunidade,
+    isLoading: isLoadingItens,
+    error: errorItens,
+    fetchItens: fetchItensDaOportunidade,
+    createItem: createOportunidadeItem,
+    updateItem: updateOportunidadeItem,
+    deleteItem: deleteOportunidadeItem,
+  } = useOportunidadeItens(oportunidade?.id);
   
-  // Dados fictícios para demonstração - Reuniões
-  const reunioes: Reuniao[] = [
-    {
-      id: "reuniao-1",
-      titulo: "Apresentação inicial da solução",
-      data: "15/05/2023",
-      hora: "14:30",
-      local: "Escritório do cliente",
-      participantes: ["Ana Silva", "Carlos Pereira", "Roberto (Cliente)"],
-      concluida: true,
-      notas: "Cliente demonstrou interesse na solução, solicitou detalhamento técnico adicional."
-    },
-    {
-      id: "reuniao-2",
-      titulo: "Demonstração técnica",
-      data: "28/05/2023",
-      hora: "10:00",
-      local: "Videoconferência",
-      participantes: ["Ana Silva", "Equipe técnica", "Departamento de TI (Cliente)"],
-      concluida: true,
-      notas: "Detalhamento da arquitetura e integrações. Cliente solicitou orçamento detalhado."
-    },
-    {
-      id: "reuniao-3",
-      titulo: "Apresentação da proposta comercial",
-      data: "15/06/2023",
-      hora: "15:00",
-      local: "Sede da empresa",
-      participantes: ["Ana Silva", "Diretor Comercial", "Diretoria (Cliente)"],
-      concluida: false
-    }
-  ];
-
   useEffect(() => {
     if (oportunidade) {
       setFormData({
@@ -160,17 +159,151 @@ export function DetalhesOportunidade({ oportunidade, open, onOpenChange, onClien
         descricao:
           oportunidade.descricao ||
           "Implementação de solução tecnológica para atender às necessidades específicas do cliente, incluindo módulos de gestão, relatórios e integrações com sistemas existentes.",
-      })
+      });
+      // Resetar documentos ao mudar oportunidade
+      setDocumentosOportunidade([]);
     }
   }, [oportunidade])
 
-  const adicionarNota = () => {
-    if (novaNota.trim()) {
-      console.log("Nova nota adicionada:", novaNota)
-      setNovaNota("")
-      // Aqui você implementaria a lógica para adicionar a nota ao estado
+  useEffect(() => {
+    if (oportunidade?.id && activeTab === "documentos" && documentosOportunidade.length === 0) {
+      const fetchDocumentos = async () => {
+        setIsLoadingDocumentos(true);
+        try {
+          const response = await fetch(`/api/documentos/por-oportunidade?oportunidadeId=${oportunidade.id}`);
+          if (!response.ok) {
+            throw new Error('Falha ao buscar documentos da oportunidade');
+          }
+          const data = await response.json();
+          setDocumentosOportunidade(data);
+        } catch (error) {
+          console.error("Erro ao buscar documentos:", error);
+          setDocumentosOportunidade([]); // Limpar em caso de erro
+        } finally {
+          setIsLoadingDocumentos(false);
+        }
+      };
+      fetchDocumentos();
     }
-  }
+  }, [oportunidade?.id, activeTab, documentosOportunidade.length]);
+
+  const adicionarNota = async () => {
+    if (!novaNota.trim() || !oportunidade?.id || !user?.id) {
+      toast({
+        title: "Erro",
+        description: "Não é possível adicionar uma nota vazia ou sem informações da oportunidade/usuário.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setIsAddingNota(true);
+    try {
+      const payload = {
+        oportunidade_id: oportunidade.id,
+        autor_id: user.id,
+        texto: novaNota.trim(),
+        // tipo: "geral" // Opcional, se quiser definir um tipo padrão
+      };
+      await createNota(payload); // O hook useNotas deve atualizar a lista automaticamente
+      setNovaNota("");
+      toast({
+        title: "Sucesso",
+        description: "Nota adicionada com sucesso.",
+        variant: "default",
+      });
+      // Opcionalmente, chamar fetchNotas se o createNota não atualizar a lista como esperado:
+      // if(oportunidade?.id) fetchNotas(oportunidade.id);
+    } catch (error) {
+      console.error("Erro ao adicionar nota:", error);
+      toast({
+        title: "Erro",
+        description: `Falha ao adicionar nota: ${error instanceof Error ? error.message : "Erro desconhecido"}`,
+        variant: "destructive",
+      });
+    } finally {
+      setIsAddingNota(false);
+    }
+  };
+
+  // CRUD Itens da Oportunidade
+  const handleCreateItem = async () => {
+    if (!oportunidade?.id || !novoItemFormData.itemNome || novoItemFormData.quantidade === undefined || novoItemFormData.valorUnitario === undefined) {
+      toast({ title: "Erro", description: "Nome do item, quantidade e valor unitário são obrigatórios.", variant: "destructive" });
+      return;
+    }
+    setIsSubmittingItem(true);
+    try {
+      const payload = {
+        ...novoItemFormData,
+        oportunidadeId: oportunidade.id, // Adiciona oportunidadeId ao payload
+        quantidade: Number(novoItemFormData.quantidade) || 0,
+        valorUnitario: Number(novoItemFormData.valorUnitario) || 0,
+      };
+      await createOportunidadeItem(payload as Omit<OportunidadeItem, 'id' | 'valorTotal' | 'createdAt' | 'updatedAt'>);
+      toast({ title: "Sucesso", description: "Item adicionado à oportunidade." });
+      setShowAddItemModal(false);
+      setNovoItemFormData(initialNovoItemFormData);
+      if (onOportunidadeNeedsRefresh) onOportunidadeNeedsRefresh();
+    } catch (error) {
+      console.error("Erro ao criar item:", error);
+      toast({ title: "Erro", description: `Não foi possível adicionar o item: ${error instanceof Error ? error.message : "Erro desconhecido"}`, variant: "destructive" });
+    } finally {
+      setIsSubmittingItem(false);
+    }
+  };
+
+  const handleEditItemClick = (item: OportunidadeItem) => {
+    setEditItemFormData({...item});
+    setShowEditItemModal(true);
+  };
+
+  const handleUpdateItem = async () => {
+    if (!editItemFormData || !editItemFormData.id || !editItemFormData.itemNome || editItemFormData.quantidade === undefined || editItemFormData.valorUnitario === undefined) {
+      toast({ title: "Erro", description: "Nome do item, quantidade e valor unitário são obrigatórios.", variant: "destructive" });
+      return;
+    }
+    setIsSubmittingItem(true);
+    try {
+      const { id, oportunidadeId, createdAt, updatedAt, valorTotal, ...dadosParaAtualizar } = editItemFormData;
+      const payload = {
+          ...dadosParaAtualizar,
+          quantidade: Number(dadosParaAtualizar.quantidade) || 0,
+          valorUnitario: Number(dadosParaAtualizar.valorUnitario) || 0,
+      };
+      await updateOportunidadeItem(id, payload);
+      toast({ title: "Sucesso", description: "Item atualizado." });
+      setShowEditItemModal(false);
+      setEditItemFormData(null);
+      if (onOportunidadeNeedsRefresh) onOportunidadeNeedsRefresh();
+    } catch (error) {
+      console.error("Erro ao atualizar item:", error);
+      toast({ title: "Erro", description: `Não foi possível atualizar o item: ${error instanceof Error ? error.message : "Erro desconhecido"}`, variant: "destructive" });
+    } finally {
+      setIsSubmittingItem(false);
+    }
+  };
+
+  const handleDeleteItemClick = (itemId: string) => {
+    setItemParaExcluirId(itemId);
+    setShowDeleteItemConfirm(true);
+  };
+
+  const handleConfirmDeleteItem = async () => {
+    if (!itemParaExcluirId) return;
+    setIsSubmittingItem(true);
+    try {
+      await deleteOportunidadeItem(itemParaExcluirId);
+      toast({ title: "Sucesso", description: "Item excluído." });
+      setItemParaExcluirId(null);
+      setShowDeleteItemConfirm(false);
+      if (onOportunidadeNeedsRefresh) onOportunidadeNeedsRefresh();
+    } catch (error) {
+      console.error("Erro ao excluir item:", error);
+      toast({ title: "Erro", description: `Não foi possível excluir o item: ${error instanceof Error ? error.message : "Erro desconhecido"}`, variant: "destructive" });
+    } finally {
+      setIsSubmittingItem(false);
+    }
+  };
 
   const handleFieldChange = (field: string, value: string) => {
     setFormData((prev) => ({
@@ -265,10 +398,11 @@ export function DetalhesOportunidade({ oportunidade, open, onOpenChange, onClien
         </SheetHeader>
 
         <Tabs defaultValue="resumo" value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid grid-cols-4 mb-4">
+          <TabsList className="grid grid-cols-5 mb-4"> {/* Ajustado para 5 colunas */}
             <TabsTrigger value="resumo">Resumo</TabsTrigger>
             <TabsTrigger value="agendamentos">Agendamentos</TabsTrigger>
             <TabsTrigger value="notas">Notas</TabsTrigger>
+            <TabsTrigger value="documentos">Documentos</TabsTrigger> {/* Nova aba */}
             <TabsTrigger value="servicos">Serviços</TabsTrigger>
           </TabsList>
 
@@ -488,40 +622,82 @@ export function DetalhesOportunidade({ oportunidade, open, onOpenChange, onClien
 
           {activeTab === "agendamentos" && (
             <div className="space-y-4">
-              <div className="flex justify-between items-center">
+              <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Agendamentos</h3>
+                <Button size="sm" onClick={() => setShowAgendarReuniaoModal(true)} disabled={!oportunidade}>
+                  <PlusCircleIcon className="w-4 h-4 mr-2" />
+                  Agendar Nova Reunião
+                </Button>
               </div>
 
-              <div className="space-y-3">
-                {reunioes.map((reuniao) => (
-                  <div key={reuniao.id} className="border rounded-lg p-4 hover:border-gray-400 transition-colors">
-                    <div className="flex justify-between">
-                      <div>
-                        <h4 className="font-medium">{reuniao.titulo}</h4>
-                        <p className="text-sm text-gray-500 mt-1">
-                          {reuniao.data} - {reuniao.hora} - {reuniao.local}
-                        </p>
-                      </div>
-                      <div className="font-semibold">{reuniao.concluida ? "Concluída" : "Pendente"}</div>
-                    </div>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {reuniao.participantes.map((participante) => (
-                        <Badge key={participante} variant="outline" className="flex items-center gap-1">
-                          <Users className="w-3 h-3" />
-                          {participante}
+              {isLoadingReunioes ? (
+                <div className="flex items-center justify-center py-6">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  <p className="ml-2 text-muted-foreground">Carregando reuniões...</p>
+                </div>
+              ) : reunioesDaOportunidade.length > 0 ? (
+                <div className="space-y-3">
+                  {reunioesDaOportunidade.map((reuniao: ReuniaoType) => (
+                    <div key={reuniao.id} className="border rounded-lg p-4 hover:border-gray-400 transition-colors">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="font-medium">{reuniao.titulo}</h4>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            {new Date(reuniao.data_inicio).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                            {' às '}
+                            {new Date(reuniao.data_inicio).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                            {reuniao.local && ` - ${reuniao.local}`}
+                          </p>
+                        </div>
+                        <Badge variant={reuniao.status === 'concluida' ? 'default' : 'outline'}
+                               className={reuniao.status === 'concluida' ? 'bg-green-100 text-green-800' : ''}>
+                          {reuniao.status === 'concluida' ? "Concluída" : reuniao.status === 'cancelada' ? "Cancelada" : "Pendente"}
                         </Badge>
-                      ))}
-                    </div>
-                    {reuniao.notas && (
-                      <div className="mt-2">
-                        <h4 className="text-sm font-medium">Notas:</h4>
-                        <p className="text-sm text-gray-500">{reuniao.notas}</p>
                       </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+                      {reuniao.participantes && reuniao.participantes.length > 0 && (
+                        <div className="mt-2">
+                          <h5 className="text-xs font-medium text-muted-foreground">Participantes:</h5>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {reuniao.participantes.map((p: any) => (
+                              <Badge key={p.participante_id} variant="secondary" className="text-xs">
+                                {p.tipo_participante}: {p.participante_id} {/* Melhorar para mostrar nomes */}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {reuniao.notas && (
+                        <div className="mt-2">
+                          <h5 className="text-xs font-medium text-muted-foreground">Notas:</h5>
+                          <p className="text-sm text-gray-600 whitespace-pre-wrap">{reuniao.notas}</p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-6">
+                  <CalendarIcon className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+                  <p className="text-muted-foreground">Nenhuma reunião agendada para esta oportunidade.</p>
+                </div>
+              )}
             </div>
+          )}
+
+          {oportunidade && (
+            <AgendarReuniao
+              open={showAgendarReuniaoModal}
+              onOpenChange={setShowAgendarReuniaoModal}
+              oportunidadeId={oportunidade.id}
+              clienteId={oportunidade.clienteId} // Assumindo que clienteId está disponível
+              // responsaveis={[]} // Passar lista de responsáveis se necessário para o modal
+              onReuniaoAgendada={() => {
+                if (oportunidade?.id) {
+                  fetchReunioes(oportunidade.id);
+                }
+                setShowAgendarReuniaoModal(false);
+              }}
+            />
           )}
 
           {activeTab === "notas" && (
@@ -534,83 +710,258 @@ export function DetalhesOportunidade({ oportunidade, open, onOpenChange, onClien
                   value={novaNota}
                   onChange={(e) => setNovaNota(e.target.value)}
                   rows={3}
+                  disabled={isAddingNota}
                 />
                 <div className="flex justify-end">
-                  <Button size="sm" onClick={adicionarNota} disabled={!novaNota.trim()}>
-                    <MessageSquare className="w-4 h-4 mr-2" />
-                    Adicionar
+                  <Button size="sm" onClick={adicionarNota} disabled={!novaNota.trim() || isAddingNota}>
+                    {isAddingNota ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <MessageSquare className="w-4 h-4 mr-2" />}
+                    {isAddingNota ? "Adicionando..." : "Adicionar"}
                   </Button>
                 </div>
               </div>
 
               <Separator />
-
-              <div className="space-y-4">
-                {notas.map((nota) => (
-                  <div key={nota.id} className="border rounded-lg p-4 bg-white">
-                    <div className="flex justify-between items-start">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">
-                          {nota.autor.charAt(0)}
-                        </div>
-                        <div>
-                          <p className="font-medium">{nota.autor}</p>
-                          <p className="text-sm text-gray-500">{nota.data}</p>
-                        </div>
-                      </div>
-                    </div>
-                    <p className="mt-3">{nota.texto}</p>
+              {isLoadingNotas ? (
+                 <div className="flex items-center justify-center py-6">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    <p className="ml-2 text-muted-foreground">Carregando notas...</p>
                   </div>
-                ))}
-              </div>
+              ) : notasDaOportunidade.length > 0 ? (
+                <div className="space-y-4">
+                  {notasDaOportunidade.map((nota: Nota) => (
+                    <div key={nota.id} className="border rounded-lg p-4 bg-white shadow-sm">
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-sm font-semibold text-gray-600">
+                            {nota.autor_nome ? nota.autor_nome.substring(0, 2).toUpperCase() : "SN"}
+                          </div>
+                          <div>
+                            <p className="font-medium text-sm">{nota.autor_nome || "Usuário desconhecido"}</p>
+                            <p className="text-xs text-gray-500">
+                              {new Date(nota.data_criacao).toLocaleDateString('pt-BR', {day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'})}
+                            </p>
+                          </div>
+                        </div>
+                        {/* Pode adicionar ações por nota aqui, como editar/excluir */}
+                      </div>
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap">{nota.texto}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-6">
+                  <MessageSquare className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+                  <p className="text-muted-foreground">Nenhuma nota adicionada a esta oportunidade ainda.</p>
+                </div>
+              )}
             </div>
           )}
 
           {activeTab === "servicos" && (
             <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <h3 className="text-lg font-medium">Serviços Oferecidos</h3>
-                {isEditing && (
-                  <Button size="sm" className="gap-2">
-                    <PlusCircle className="w-4 h-4" />
-                    Adicionar Serviço
-                  </Button>
-                )}
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Itens da Proposta / Serviços</h3>
+                <Button size="sm" onClick={() => {
+                  setNovoItemFormData(initialNovoItemFormData); // Resetar para valores iniciais
+                  setShowAddItemModal(true);
+                }}
+                disabled={!oportunidade /* || isEditing - se a edicao geral da oportunidade bloquear add item */}>
+                  <PlusCircleIcon className="w-4 h-4 mr-2" />
+                  Adicionar Item
+                </Button>
               </div>
 
-              <div className="space-y-3">
-                <div className="border rounded-lg p-4 hover:border-gray-400 transition-colors">
-                  <div className="flex justify-between">
-                    <div>
-                      <h4 className="font-medium">Sistema de Gestão Municipal</h4>
-                      <p className="text-sm text-gray-500 mt-1">
-                        Software completo para gestão administrativa municipal
-                      </p>
-                    </div>
-                    <div className="font-semibold">R$ 280.000,00</div>
-                  </div>
+              {isLoadingItens && (
+                <div className="flex items-center justify-center py-6">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  <p className="ml-2">Carregando itens...</p>
                 </div>
-                <div className="border rounded-lg p-4 hover:border-gray-400 transition-colors">
-                  <div className="flex justify-between">
-                    <div>
-                      <h4 className="font-medium">Módulo de Recursos Humanos</h4>
-                      <p className="text-sm text-gray-500 mt-1">
-                        Gestão de funcionários, folha de pagamento e benefícios
-                      </p>
-                    </div>
-                    <div className="font-semibold">R$ 85.000,00</div>
-                  </div>
-                </div>
-              </div>
+              )}
+              {errorItens && <p className="text-red-500 text-sm">Erro ao carregar itens: {errorItens}</p>}
 
-              <div className="flex justify-between pt-4 border-t">
-                <span className="font-medium">Valor Total:</span>
-                <span className="font-bold text-lg">R$ 365.000,00</span>
-              </div>
+              {!isLoadingItens && !errorItens && itensDaOportunidade.length > 0 && (
+                <div className="space-y-3">
+                  {itensDaOportunidade.map((item) => (
+                    <Card key={item.id} className="bg-gray-50/50 hover:shadow-md transition-shadow">
+                      <CardContent className="p-4">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h4 className="font-semibold text-gray-800">{item.itemNome}</h4>
+                            {item.descricao && <p className="text-xs text-gray-600 mt-1 whitespace-pre-line">{item.descricao}</p>}
+                          </div>
+                          <div className="flex space-x-1">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleEditItemClick(item)}>
+                              <Edit3Icon className="h-4 w-4 text-blue-600" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleDeleteItemClick(item.id)}>
+                              <Trash2Icon className="h-4 w-4 text-red-600" />
+                            </Button>
+                          </div>
+                        </div>
+                        <Separator className="my-2" />
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-gray-700">
+                          <div><span className="font-medium">Qtde:</span> {item.quantidade} {item.unidade}</div>
+                          <div><span className="font-medium">Vlr. Unit.:</span> {item.valorUnitario.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</div>
+                          <div className="col-span-2 md:col-span-1"><span className="font-medium">Vlr. Total:</span> <span className="font-semibold">{item.valorTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span></div>
+                          {item.ordem !== null && item.ordem !== undefined && <div><span className="font-medium">Ordem:</span> {item.ordem}</div>}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+              {!isLoadingItens && !errorItens && itensDaOportunidade.length === 0 && (
+                 <div className="text-center py-6">
+                  <PackageIcon className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+                  <p className="text-muted-foreground">Nenhum item cadastrado para esta oportunidade.</p>
+                </div>
+              )}
+
+              {itensDaOportunidade.length > 0 && (
+                <div className="flex justify-end pt-4 border-t mt-4">
+                  <span className="font-medium">Valor Total da Proposta (Itens):</span>
+                  <span className="font-bold text-lg ml-2">
+                    {itensDaOportunidade.reduce((acc, item) => acc + item.valorTotal, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === "documentos" && (
+            <div className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Documentos da Oportunidade</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {isLoadingDocumentos ? (
+                    <div className="flex items-center justify-center py-6">
+                      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                      <p className="ml-2 text-muted-foreground">Carregando documentos...</p>
+                    </div>
+                  ) : documentosOportunidade.length > 0 ? (
+                    <ul className="space-y-3">
+                      {documentosOportunidade.map((doc) => (
+                        <li key={doc.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-md hover:bg-gray-100">
+                          <div className="flex items-center space-x-3">
+                            <FileTextIcon className="h-5 w-5 text-blue-500" />
+                            <div>
+                              <a
+                                href={doc.url_documento}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sm font-medium text-blue-600 hover:underline hover:text-blue-800"
+                                title={doc.nome}
+                              >
+                                {doc.nome.length > 40 ? `${doc.nome.substring(0, 37)}...` : doc.nome}
+                              </a>
+                              <p className="text-xs text-muted-foreground">
+                                {doc.tipo} - {doc.formato?.toUpperCase()} - {doc.tamanho}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Upload: {doc.data_criacao}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="text-center py-6">
+                      <FileTextIcon className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+                      <p className="text-muted-foreground">Nenhum documento associado a esta oportunidade.</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           )}
         </Tabs>
       </SheetContent>
     </Sheet>
+
+    {/* Modal Adicionar Item */}
+    {oportunidade && (
+      <Dialog open={showAddItemModal} onOpenChange={setShowAddItemModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Adicionar Item/Serviço à Oportunidade</DialogTitle>
+            <DialogDescription>Preencha os detalhes do novo item.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div><Label htmlFor="novo-item-nome">Nome do Item*</Label><Input id="novo-item-nome" value={novoItemFormData.itemNome || ""} onChange={e => setNovoItemFormData(prev => ({...prev, itemNome: e.target.value}))} /></div>
+            <div><Label htmlFor="novo-item-desc">Descrição</Label><Textarea id="novo-item-desc" value={novoItemFormData.descricao || ""} onChange={e => setNovoItemFormData(prev => ({...prev, descricao: e.target.value}))} /></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><Label htmlFor="novo-item-qtd">Quantidade*</Label><Input id="novo-item-qtd" type="number" min="0" value={novoItemFormData.quantidade || 1} onChange={e => setNovoItemFormData(prev => ({...prev, quantidade: parseFloat(e.target.value) || 0}))} /></div>
+              <div><Label htmlFor="novo-item-un">Unidade</Label><Input id="novo-item-un" value={novoItemFormData.unidade || ""} onChange={e => setNovoItemFormData(prev => ({...prev, unidade: e.target.value}))} /></div>
+            </div>
+            <div><Label htmlFor="novo-item-vlr">Valor Unitário*</Label><Input id="novo-item-vlr" type="number" min="0" step="0.01" value={novoItemFormData.valorUnitario || 0} onChange={e => setNovoItemFormData(prev => ({...prev, valorUnitario: parseFloat(e.target.value) || 0}))} /></div>
+            <div><Label htmlFor="novo-item-ordem">Ordem</Label><Input id="novo-item-ordem" type="number" value={novoItemFormData.ordem || 0} onChange={e => setNovoItemFormData(prev => ({...prev, ordem: parseInt(e.target.value) || 0}))} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddItemModal(false)} disabled={isSubmittingItem}>Cancelar</Button>
+            <Button onClick={handleCreateItem} disabled={isSubmittingItem}>
+              {isSubmittingItem ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />} Salvar Item
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )}
+
+    {/* Modal Editar Item */}
+    {oportunidade && editItemFormData && (
+      <Dialog open={showEditItemModal} onOpenChange={(isOpen) => {
+        setShowEditItemModal(isOpen);
+        if (!isOpen) setEditItemFormData(null); // Limpar ao fechar se não estiver salvando
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Editar Item da Oportunidade</DialogTitle>
+            <DialogDescription>Modifique os detalhes do item.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div><Label htmlFor="edit-item-nome">Nome do Item*</Label><Input id="edit-item-nome" value={editItemFormData.itemNome || ""} onChange={e => setEditItemFormData(prev => prev ? {...prev, itemNome: e.target.value} : null)} /></div>
+            <div><Label htmlFor="edit-item-desc">Descrição</Label><Textarea id="edit-item-desc" value={editItemFormData.descricao || ""} onChange={e => setEditItemFormData(prev => prev ? {...prev, descricao: e.target.value} : null)} /></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><Label htmlFor="edit-item-qtd">Quantidade*</Label><Input id="edit-item-qtd" type="number" min="0" value={editItemFormData.quantidade || 1} onChange={e => setEditItemFormData(prev => prev ? {...prev, quantidade: parseFloat(e.target.value) || 0} : null)} /></div>
+              <div><Label htmlFor="edit-item-un">Unidade</Label><Input id="edit-item-un" value={editItemFormData.unidade || ""} onChange={e => setEditItemFormData(prev => prev ? {...prev, unidade: e.target.value} : null)} /></div>
+            </div>
+            <div><Label htmlFor="edit-item-vlr">Valor Unitário*</Label><Input id="edit-item-vlr" type="number" min="0" step="0.01" value={editItemFormData.valorUnitario || 0} onChange={e => setEditItemFormData(prev => prev ? {...prev, valorUnitario: parseFloat(e.target.value) || 0} : null)} /></div>
+            <div><Label htmlFor="edit-item-ordem">Ordem</Label><Input id="edit-item-ordem" type="number" value={editItemFormData.ordem || 0} onChange={e => setEditItemFormData(prev => prev ? {...prev, ordem: parseInt(e.target.value) || 0} : null)} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {setShowEditItemModal(false); setEditItemFormData(null);}} disabled={isSubmittingItem}>Cancelar</Button>
+            <Button onClick={handleUpdateItem} disabled={isSubmittingItem}>
+              {isSubmittingItem ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />} Salvar Alterações
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )}
+
+    {/* AlertDialog para Excluir Item */}
+    <AlertDialog open={showDeleteItemConfirm} onOpenChange={setShowDeleteItemConfirm}>
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>Confirmar Exclusão</AlertDialogTitle>
+                <AlertDialogDescription>
+                    Tem certeza que deseja excluir este item da oportunidade? Esta ação não pode ser desfeita.
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel onClick={() => setItemParaExcluirId(null)} disabled={isSubmittingItem}>Cancelar</AlertDialogCancel>
+                <AlertDialogAction
+                    onClick={handleConfirmDeleteItem}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    disabled={isSubmittingItem}
+                >
+                   {isSubmittingItem ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Trash2Icon className="h-4 w-4 mr-2" />} Excluir Item
+                </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+    </AlertDialog>
+  </>
   )
 }

@@ -36,30 +36,11 @@ O módulo de autenticação é composto pelos seguintes componentes:
 - `/components/auth/protected-route.tsx`: Proteção de rotas baseado em autenticação
 - `/components/auth/role-protected-route.tsx`: Proteção de rotas baseado em funções
 
-### Banco de Dados (Supabase)
+### Banco de Dados (MySQL)
 
-O esquema do banco de dados está definido em `/schema/auth-schema.sql`, incluindo:
-
-- Tabela `users`: Armazena informações dos usuários
-- Tabela `refresh_tokens`: Gerencia tokens de refresh
-- Tabela `roles`: Define os níveis de acesso
-- Tabela `permissions`: Define permissões específicas
-- Tabela `role_permissions`: Relacionamento entre funções e permissões
-- Tabela `user_profiles`: Armazena informações adicionais dos usuários
-- Tabela `user_preferences`: Armazena preferências dos usuários
+O esquema do banco de dados para autenticação está definido em `auth_mysql.sql`. Este arquivo contém as definições para as tabelas `users` e `refresh_tokens` utilizadas no sistema de autenticação MySQL.
 
 ## Configuração
-
-### 1. Configuração do Supabase
-
-1. Crie um novo projeto no [Supabase](https://supabase.com/)
-2. Execute o script SQL em `/schema/auth-schema.sql` para criar as tabelas necessárias
-3. Configure as seguintes variáveis de ambiente:
-
-```
-NEXT_PUBLIC_SUPABASE_URL=https://seu-projeto.supabase.co
-SUPABASE_SERVICE_KEY=sua-chave-de-servico-supabase
-```
 
 ### 2. Configuração do Microsoft OAuth
 
@@ -101,7 +82,7 @@ JWT_REFRESH_SECRET=chave-secreta-para-refresh-tokens
 As seguintes dependências foram adicionadas ao projeto:
 
 ```bash
-npm install @supabase/supabase-js bcrypt jsonwebtoken jose @minio/minio-js
+npm install bcrypt jsonwebtoken jose @minio/minio-js
 npm install -D @types/bcrypt @types/jsonwebtoken
 ```
 

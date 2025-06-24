@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Oportunidade, OportunidadeFiltros, OportunidadeStatus } from '@/types/comercial';
-// import { supabase, crmonefactory } from '@/lib/supabase/client'; // Supabase client removed
 
 // Cache para armazenar resultados de requisiu00e7u00f5es anteriores
 interface CacheItem {
