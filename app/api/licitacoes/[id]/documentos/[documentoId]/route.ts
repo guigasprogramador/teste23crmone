@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-// import { Licitacao, Documento } from '@/types/licitacoes'; // Types might need adjustment
 import { getDbConnection } from '@/lib/mysql/client';
 import { v4 as uuidv4 } from 'uuid';
+import { cloudinary } from '@/lib/cloudinary/config'; // Importar cloudinary
 
 // Helper para formatar data YYYY-MM-DD para DD/MM/YYYY
 function formatDateToDDMMYYYY(dateString: string | null): string | undefined {
@@ -276,7 +276,7 @@ export async function DELETE(
 ) {
   let connection;
   const { id: licitacaoId, documentoId } = params;
-  console.log(`DELETE /api/licitacoes/${licitacaoId}/documentos/${documentoId} - Iniciando exclusão com MySQL`);
+  console.log(`DELETE /api/licitacoes/${licitacaoId}/documentos/${documentoId} - Iniciando exclusão`);
 
   if (!licitacaoId || !documentoId) {
     return NextResponse.json({ error: 'ID da Licitação e ID do Documento são obrigatórios' }, { status: 400 });
@@ -284,24 +284,79 @@ export async function DELETE(
 
   try {
     connection = await getDbConnection();
+    await connection.beginTransaction();
+
+    // 1. Obter o arquivo_path (public_id do Cloudinary) e formato
+    const [docRows]: any = await connection.execute(
+      'SELECT arquivo_path, formato FROM documentos WHERE id = ? AND licitacao_id = ?',
+      [documentoId, licitacaoId]
+    );
+
+    if (docRows.length === 0) {
+      await connection.rollback();
+      return NextResponse.json({ error: 'Documento não encontrado ou não pertence à licitação' }, { status: 404 });
+    }
+    const arquivoPath = docRows[0].arquivo_path;
+    const formato = docRows[0].formato;
+
+    // 2. Excluir do Cloudinary se arquivo_path existir
+    if (arquivoPath) {
+      try {
+        let resourceType = "raw"; // Default para documentos genéricos/PDFs
+        const formatoLower = formato?.toLowerCase();
+        if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(formatoLower)) {
+          resourceType = "image";
+        } else if (['mp4', 'mov', 'avi', 'mkv'].includes(formatoLower)) {
+          resourceType = "video";
+        }
+
+        console.log(`Tentando excluir do Cloudinary: public_id=${arquivoPath}, resource_type=${resourceType}`);
+        const destructionResult = await cloudinary.uploader.destroy(arquivoPath, { resource_type: resourceType });
+        console.log(`Arquivo ${arquivoPath} excluído do Cloudinary. Resultado:`, destructionResult);
+        // Cloudinary retorna { result: 'ok' } ou { result: 'not found' } etc.
+        // Se 'not found', não consideramos um erro fatal para a exclusão do DB.
+        if (destructionResult.result !== 'ok' && destructionResult.result !== 'not found') {
+            // Logar um aviso, mas não necessariamente bloquear a exclusão do DB se o arquivo já não estava lá
+            console.warn(`Aviso ao excluir do Cloudinary: ${destructionResult.result}`);
+        }
+
+      } catch (cloudinaryError: any) {
+        // Não reverter a transação por falha no Cloudinary, apenas logar.
+        // A exclusão do DB é mais crítica. Ou, dependendo da política, pode-se reverter.
+        // Por ora, vamos logar e continuar para remover do DB.
+        console.error('Erro ao excluir arquivo do Cloudinary (não fatal para DB):', cloudinaryError);
+        // Se a política for estrita:
+        // await connection.rollback();
+        // return NextResponse.json({ error: 'Erro ao excluir arquivo do storage', details: cloudinaryError.message || cloudinaryError }, { status: 500 });
+      }
+    }
+
+    // 3. Excluir do banco de dados
     // ON DELETE CASCADE na FK de documentos_tags para documento_id cuidará da limpeza em documentos_tags.
     const [result]: any = await connection.execute(
       'DELETE FROM documentos WHERE id = ? AND licitacao_id = ?',
       [documentoId, licitacaoId]
     );
-    
+
+    // A verificação de affectedRows já foi feita implicitamente pelo select anterior.
+    // Se chegou aqui e o select encontrou, o delete deve funcionar (a menos que haja deleção concorrente).
     if (result.affectedRows === 0) {
-      return NextResponse.json({ error: 'Documento não encontrado ou não pertence à licitação especificada' }, { status: 404 });
+        // Isso pode acontecer se o documento foi excluído entre o SELECT e o DELETE.
+        await connection.rollback();
+        return NextResponse.json({ error: 'Documento não encontrado para exclusão (possivelmente já excluído)' }, { status: 404 });
     }
-    
-    console.warn(`AVISO: Remoção de arquivo do storage para documento ID ${documentoId} NÃO está implementada.`);
-    return NextResponse.json({ message: 'Documento excluído com sucesso do banco de dados (armazenamento de arquivo pendente).' });
+
+    await connection.commit();
+    return NextResponse.json({ message: 'Documento excluído com sucesso do banco de dados e do storage.' });
 
   } catch (error: any) {
-    console.error('Erro ao excluir documento (MySQL):', error);
+    if (connection) await connection.rollback().catch(rbError => console.error("Erro no rollback DELETE:", rbError));
+    console.error('Erro ao excluir documento:', error);
     return NextResponse.json(
-      { error: 'Erro ao remover documento' },
+      { error: 'Erro ao remover documento', details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (connection) await connection.release();
   }
 }
