@@ -23,9 +23,9 @@ function formatOportunidadeItem(item: any) {
 // GET - Listar itens de uma oportunidade
 export async function GET(
   request: NextRequest,
-  { params }: { params: { oportunidadeId: string } }
+  { params }: { params: { id: string } } // Alterado para 'id'
 ) {
-  const { oportunidadeId } = params;
+  const { id: oportunidadeId } = params; // Renomeado para oportunidadeId para clareza interna
   if (!oportunidadeId) {
     return NextResponse.json({ error: 'ID da oportunidade é obrigatório' }, { status: 400 });
   }
@@ -50,9 +50,9 @@ export async function GET(
 // POST - Adicionar um novo item a uma oportunidade
 export async function POST(
   request: NextRequest,
-  { params }: { params: { oportunidadeId: string } }
+  { params }: { params: { id: string } } // Alterado para 'id'
 ) {
-  const { oportunidadeId } = params;
+  const { id: oportunidadeId } = params; // Renomeado para oportunidadeId para clareza interna
   if (!oportunidadeId) {
     return NextResponse.json({ error: 'ID da oportunidade é obrigatório na URL' }, { status: 400 });
   }
