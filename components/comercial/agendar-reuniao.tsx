@@ -1,160 +1,176 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Button } from "@/components/ui/button"
-import { Label } from "@/components/ui/label"
-import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { CalendarIcon, CheckIcon } from "lucide-react"
-import { Oportunidade } from "@/types/comercial"
-import { format, addDays } from "date-fns"
+import { CalendarIcon, CheckIcon, Loader2 } from "lucide-react"; // Added Loader2
+import { Oportunidade } from "@/types/comercial";
+import { format, addDays, addMinutes } from "date-fns"; // Added addMinutes
 import { ptBR } from "date-fns/locale"
 import { toast } from "@/components/ui/use-toast"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar } from "@/components/ui/calendar"
-import { cn } from "@/lib/utils"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { cn } from "@/lib/utils";
+import { useReunioes } from "@/hooks/comercial/use-reunioes"; // Importar hook
 
 interface AgendarReuniaoProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  oportunidade: Oportunidade
-  onReuniaoAgendada?: (reuniao: any) => void
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  oportunidadeId: string; // Passar ID da oportunidade
+  clienteId?: string; // Passar ID do cliente (opcional, mas útil)
+  clienteNome?: string; // Nome do cliente para exibição
+  responsavelAtualNome?: string; // Nome do responsável atual da oportunidade
+  onReuniaoAgendada?: () => void; // Callback sem argumento
 }
 
 export function AgendarReuniao({ 
   open, 
   onOpenChange, 
-  oportunidade,
+  oportunidadeId,
+  clienteId,
+  clienteNome,
+  responsavelAtualNome,
   onReuniaoAgendada
 }: AgendarReuniaoProps) {
-  // Estado para armazenar a data selecionada
-  const [data, setData] = useState<Date | undefined>(addDays(new Date(), 1))
+  const { createReuniao, isLoading: isLoadingCreateReuniao } = useReunioes();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [titulo, setTitulo] = useState<string>(`Reunião - Oportunidade com ${clienteNome || 'Cliente'}`);
+  const [data, setData] = useState<Date | undefined>(addDays(new Date(), 1));
+  const [hora, setHora] = useState<string>("09:00");
+  const [duracao, setDuracao] = useState<string>("30");
+  const [local, setLocal] = useState<string>("online");
+  const [link, setLink] = useState<string>("");
+  const [endereco, setEndereco] = useState<string>("");
+  const [pauta, setPauta] = useState<string>("");
+  // const [participantesExternos, setParticipantesExternos] = useState<string>(""); // Campo para participantes externos (nomes)
   
-  // Estado para armazenar a hora selecionada
-  const [hora, setHora] = useState<string>("09:00")
-  
-  // Estado para armazenar a duração selecionada
-  const [duracao, setDuracao] = useState<string>("30")
-  
-  // Estado para armazenar o local da reunião
-  const [local, setLocal] = useState<string>("online")
-  
-  // Estado para armazenar o link da reunião (se online)
-  const [link, setLink] = useState<string>("")
-  
-  // Estado para armazenar o endereço da reunião (se presencial)
-  const [endereco, setEndereco] = useState<string>("")
-  
-  // Estado para armazenar a pauta da reunião
-  const [pauta, setPauta] = useState<string>("")
-  
-  // Estado para armazenar os participantes da reunião
-  const [participantes, setParticipantes] = useState<string>(oportunidade.responsavel)
-  
-  // Estado para armazenar o e-mail do cliente
-  const [emailCliente, setEmailCliente] = useState(oportunidade.clienteEmail || (oportunidade.cliente && oportunidade.cliente.email) || "");
+  const [emailCliente, setEmailCliente] = useState(""); // Será preenchido ou pode ser removido se não usado diretamente
   const [erroEmailCliente, setErroEmailCliente] = useState<string>("");
   
-  // Estado para armazenar os responsáveis
-  const [responsaveisOpcoes, setResponsaveisOpcoes] = useState<any[]>([]);
-  const [responsaveisSelecionados, setResponsaveisSelecionados] = useState<any[]>([]);
+  const [responsaveisOpcoes, setResponsaveisOpcoes] = useState<Array<{id: string, nome: string, email: string}>>([]);
+  const [responsaveisSelecionados, setResponsaveisSelecionados] = useState<Array<{id: string, nome: string, email: string}>>([]);
   const [erroResponsaveis, setErroResponsaveis] = useState<string>("");
 
-  // Buscar responsáveis para autocomplete
+  // Atualizar título e email do cliente se a oportunidade mudar
+  useEffect(() => {
+    if (oportunidadeId && clienteNome) {
+      setTitulo(`Reunião - Oportunidade com ${clienteNome}`);
+    }
+    // Lógica para buscar email do cliente se necessário (ex: com base no clienteId)
+    // setEmailCliente(oportunidade.clienteEmail || (oportunidade.cliente && oportunidade.cliente.email) || "");
+  }, [oportunidadeId, clienteNome]);
+
   useEffect(() => {
     const buscarResponsaveis = async () => {
-      const resp = await fetch("/api/comercial/responsaveis");
-      const data = await resp.json();
-      setResponsaveisOpcoes(data);
+      try {
+        const resp = await fetch("/api/comercial/responsaveis");
+        if (!resp.ok) throw new Error("Falha ao buscar responsáveis");
+        const data = await resp.json();
+        setResponsaveisOpcoes(data);
+      } catch (error) {
+        console.error("Erro ao buscar responsáveis:", error);
+        toast({ title: "Erro", description: "Não foi possível carregar a lista de responsáveis.", variant: "destructive" });
+      }
     };
-    buscarResponsaveis();
-  }, []);
+    if (open) { // Buscar apenas quando o modal estiver aberto
+      buscarResponsaveis();
+    }
+  }, [open]);
 
   // Validação de e-mail simples
   const validarEmail = (email: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
 
   // Função para lidar com o agendamento da reunião
   const handleAgendar = async () => {
-    // Validação dos campos
-    let erro = false;
+    setIsSubmitting(true);
     setErroEmailCliente("");
     setErroResponsaveis("");
-    if (!data) {
-      toast({
-        title: "Erro",
-        description: "Selecione uma data para a reunião",
-        variant: "destructive",
-      })
-      return
+
+    if (!data || !hora || !titulo.trim()) {
+      toast({ title: "Erro", description: "Título, data e hora são obrigatórios.", variant: "destructive" });
+      setIsSubmitting(false);
+      return;
     }
-    if (!emailCliente || !validarEmail(emailCliente)) {
-      setErroEmailCliente("E-mail do cliente inválido");
-      erro = true;
+
+    if (responsaveisSelecionados.length === 0) {
+      setErroResponsaveis("Selecione pelo menos um responsável interno.");
+      setIsSubmitting(false);
+      return;
     }
-    const emailsResponsaveis = responsaveisSelecionados.map(r => r.email);
-    if (emailsResponsaveis.length === 0 || emailsResponsaveis.some(email => !validarEmail(email))) {
-      setErroResponsaveis("Selecione pelo menos um responsável com e-mail válido");
-      erro = true;
-    }
-    if (erro) return;
-    // Construir objeto de reunião
-    const reuniao = {
-      oportunidadeId: oportunidade.id,
-      titulo: `Reunião - ${oportunidade.titulo}`,
-      data: format(data, "yyyy-MM-dd"),
-      hora,
-      duracao: parseInt(duracao),
-      local,
-      link: local === "online" ? link : null,
-      endereco: local === "presencial" ? endereco : null,
-      pauta,
-      participantes: participantes.split(",").map(p => p.trim()),
-      cliente: oportunidade.cliente,
-      clienteId: oportunidade.clienteId,
+    // Validação de e-mail do cliente pode ser opcional dependendo da necessidade de notificação
+    // if (emailCliente && !validarEmail(emailCliente)) {
+    //   setErroEmailCliente("E-mail do cliente inválido, se fornecido.");
+    //   setIsSubmitting(false);
+    //   return;
+    // }
+
+    const dataInicio = new Date(`${format(data, "yyyy-MM-dd")}T${hora}`);
+    const dataFim = addMinutes(dataInicio, parseInt(duracao));
+
+    const participantesPayload = responsaveisSelecionados.map(r => ({
+      participante_id: r.id,
+      tipo_participante: 'interno',
+      confirmado: true
+    }));
+
+    // Adicionar participantes externos (contatos do cliente) se houver uma lógica para obter seus IDs
+    // Ex: Se `participantesExternos` fosse um array de IDs de contatos:
+    // participantesPayload.push(...participantesExternos.map(id => ({ participante_id: id, tipo_participante: 'externo', confirmado: false })));
+
+    const reuniaoPayload = {
+      oportunidade_id: oportunidadeId,
+      titulo: titulo,
+      data_inicio: dataInicio.toISOString(),
+      data_fim: dataFim.toISOString(),
+      local: local === "online" ? link : local === "presencial" ? endereco : local,
+      notas: pauta, // Usando 'notas' para 'pauta' conforme a tabela reunioes
       status: "agendada",
-      createdAt: new Date().toISOString(),
-      emailResponsavel: emailsResponsaveis,
-      emailCliente: emailCliente,
-      responsaveisIds: responsaveisSelecionados.map(r => r.id)
-    }
+      participantes: participantesPayload,
+      // criado_por: userId, // Se tiver o ID do usuário logado
+      sendEmail: true // Ou um checkbox no form
+    };
+
     try {
-      const response = await fetch("/api/comercial/reunioes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(reuniao)
+      await createReuniao(reuniaoPayload);
+
+      toast({
+        title: "Reunião Agendada",
+        description: `Reunião "${titulo}" agendada com sucesso.`,
       });
-      if (!response.ok) {
-        throw new Error("Erro ao agendar reunião");
-      }
-      const reuniaoCriada = await response.json();
+
       if (onReuniaoAgendada) {
-        onReuniaoAgendada(reuniaoCriada)
+        onReuniaoAgendada();
       }
-      toast({
-        title: "Reunião agendada",
-        description: `Reunião agendada para ${format(data, "PPP", { locale: ptBR })} às ${hora}`,
-      })
-      onOpenChange(false)
-      setData(addDays(new Date(), 1))
-      setHora("09:00")
-      setDuracao("30")
-      setLocal("online")
-      setLink("")
-      setEndereco("")
-      setPauta("")
-      setParticipantes(oportunidade.responsavel)
-      setEmailCliente("")
-      setResponsaveisSelecionados([])
+      onOpenChange(false);
+      // Resetar campos do formulário
+      setTitulo(`Reunião - Oportunidade com ${clienteNome || 'Cliente'}`);
+      setData(addDays(new Date(), 1));
+      setHora("09:00");
+      setDuracao("30");
+      setLocal("online");
+      setLink("");
+      setEndereco("");
+      setPauta("");
+      // setParticipantesExternos("");
+      setResponsaveisSelecionados([]);
+      setEmailCliente("");
+
     } catch (error) {
+      console.error("Erro ao agendar reunião:", error);
       toast({
-        title: "Erro ao agendar reunião",
-        description: error instanceof Error ? error.message : String(error),
+        title: "Erro ao Agendar Reunião",
+        description: error instanceof Error ? error.message : "Ocorreu um erro desconhecido.",
         variant: "destructive",
-      })
+      });
+    } finally {
+      setIsSubmitting(false);
     }
-  }
+  };
   
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -162,11 +178,21 @@ export function AgendarReuniao({
         <DialogHeader>
           <DialogTitle>Agendar Reunião</DialogTitle>
           <DialogDescription>
-            {`Agende uma reunião para a oportunidade "${oportunidade.titulo}" com ${oportunidade.cliente}`}
+            {`Agende uma reunião para a oportunidade com ${clienteNome || 'o cliente'}`}
           </DialogDescription>
         </DialogHeader>
         
         <div className="grid grid-cols-1 gap-4 py-4">
+          <div className="space-y-2">
+            <Label htmlFor="tituloReuniao">Título da Reunião *</Label>
+            <Input
+              id="tituloReuniao"
+              value={titulo}
+              onChange={(e) => setTitulo(e.target.value)}
+              placeholder="Ex: Apresentação da Proposta"
+            />
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="data">Data</Label>
@@ -263,15 +289,6 @@ export function AgendarReuniao({
             </div>
           </div>
           
-          <div className="space-y-2">
-            <Label htmlFor="participantes">Participantes</Label>
-            <Input 
-              id="participantes"
-              placeholder="Nomes separados por vírgula"
-              value={participantes}
-              onChange={(e) => setParticipantes(e.target.value)}
-            />
-          </div>
           
           <div className="space-y-2">
             <Label htmlFor="pauta">Pauta da reunião</Label>
@@ -319,11 +336,15 @@ export function AgendarReuniao({
         </div>
         
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting || isLoadingCreateReuniao}>
             Cancelar
           </Button>
-          <Button onClick={handleAgendar}>
-            <CheckIcon className="mr-2 h-4 w-4" />
+          <Button onClick={handleAgendar} disabled={isSubmitting || isLoadingCreateReuniao}>
+            {isSubmitting || isLoadingCreateReuniao ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <CheckIcon className="mr-2 h-4 w-4" />
+            )}
             Agendar Reunião
           </Button>
         </DialogFooter>

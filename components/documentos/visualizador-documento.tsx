@@ -51,13 +51,9 @@ export function VisualizadorDocumento({ documento, open, onOpenChange }: Visuali
     if (documento.url) {
       return documento.url;
     }
-    
-    // Se temos o caminho do arquivo no Storage do Supabase, construir a URL
-    if (documento.arquivo_path) {
-      return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/documentos/${documento.arquivo_path}`;
-    }
-    
-    // Fallback para URLs de exemplo
+    // Se documento.url não existir, não há URL de visualização disponível.
+    // A lógica de construir a URL a partir de arquivo_path foi removida,
+    // pois arquivo_path agora é o public_id do Cloudinary e a URL completa deve vir do backend.
     return null;
   }
 

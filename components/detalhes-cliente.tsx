@@ -4,16 +4,18 @@ import { useState, useEffect } from "react"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { Building, MapPin, Hash, Phone, Mail, User, Users, Pencil, Save, Trash2, Plus, X, Calendar, DollarSign, Maximize2, Minimize2, Eye } from "lucide-react"
+import { Building, MapPin, Hash, Phone, Mail, User, Users, Pencil, Save, Trash2, Plus, X, Calendar, DollarSign, Maximize2, Minimize2, Eye, Loader2 } from "lucide-react" // Added Loader2
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox" // Added Checkbox
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { toast } from "@/components/ui/use-toast"
 import { useOportunidades } from "@/hooks/comercial/use-oportunidades"
 import { Oportunidade, Cliente, ClienteDetalhado, Contato } from "@/types/comercial"
+import { useContatos } from "@/hooks/comercial/use-contatos" // Import useContatos
 
 interface DetalhesClienteProps {
   cliente: Cliente | null
@@ -66,52 +68,74 @@ export function DetalhesCliente({ cliente, open, onOpenChange, onClienteUpdate, 
   const [editedCliente, setEditedCliente] = useState<ClienteDetalhado | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [clienteDetalhes, setClienteDetalhes] = useState<ClienteDetalhado | null>(null)
-  const [novoContato, setNovoContato] = useState<Partial<Contato>>({})
+  const [novoContato, setNovoContato] = useState<Partial<Contato>>({ nome: '', cargo: '', email: '', telefone: '', principal: false })
   const [adicionandoContato, setAdicionandoContato] = useState(false)
-  const { oportunidades, isLoading } = useOportunidades()
+  const [isSubmittingContato, setIsSubmittingContato] = useState(false)
+  const [editandoContato, setEditandoContato] = useState<Contato | null>(null);
+  const [showEditarContatoModal, setShowEditarContatoModal] = useState(false);
+  const [isSubmittingEditContato, setIsSubmittingEditContato] = useState(false);
+  const [contatoParaExcluirId, setContatoParaExcluirId] = useState<string | null>(null);
+  const [showConfirmDeleteContatoModal, setShowConfirmDeleteContatoModal] = useState(false);
+
+  const { oportunidades, isLoading: isLoadingOportunidades } = useOportunidades() // Renomeado isLoading para evitar conflito
+
+  const {
+    contatos,
+    isLoading: isLoadingContatos,
+    error: errorContatos,
+    fetchContatos,
+    createContato,
+    updateContato,
+    deleteContato
+  } = useContatos(clienteDetalhes?.id);
 
   // Carregar detalhes do cliente quando for aberto
   useEffect(() => {
     if (open && cliente) {
-      // Criar uma versão detalhada do cliente
       const detalhes: ClienteDetalhado = {
         id: cliente.id || "",
         nome: cliente.nome,
         cnpj: cliente.cnpj || "",
         endereco: cliente.endereco || "",
         segmento: cliente.segmento || "",
-        contatoNome: cliente.contatoNome || "",
-        contatoEmail: cliente.contatoEmail || "",
-        contatoTelefone: cliente.contatoTelefone || "",
+        // Campos de contato principal são removidos daqui, serão gerenciados pelo hook useContatos
+        contatoNome: "", // Será preenchido pelo contato principal do hook se necessário
+        contatoEmail: "",
+        contatoTelefone: "",
         dataCadastro: cliente.dataCadastro || new Date().toISOString(),
         ativo: cliente.ativo !== undefined ? cliente.ativo : true,
-        // Campos adicionais do ClienteDetalhado - tratados com segurança
         tipo: (cliente as any).tipo || "Empresa Privada",
         cidade: (cliente as any).cidade || "",
         estado: (cliente as any).estado || "",
-        contatos: (cliente as any).contatos || [
-          // Se não tiver contatos, criar um com os dados do contato principal
-          ...(cliente.contatoNome ? [{
-            id: "contato-principal",
-            nome: cliente.contatoNome,
-            email: cliente.contatoEmail || "",
-            telefone: cliente.contatoTelefone || "",
-            cargo: ""
-          }] : [])
-        ],
+        contatos: [], // Será populado pelo hook useContatos
         responsavelInterno: (cliente as any).responsavelInterno || "",
         descricao: (cliente as any).descricao || "",
         observacoes: (cliente as any).observacoes || "",
         faturamento: (cliente as any).faturamento || "",
+        oportunidades: [] // Será populado abaixo
+      };
+      setClienteDetalhes(detalhes);
+      setEditedCliente(detalhes); // Inicializa editedCliente também
+    }
+  }, [open, cliente]);
+
+  // Atualizar oportunidades do cliente
+  useEffect(() => {
+    if (clienteDetalhes && cliente) {
+      setClienteDetalhes(prev => ({
+        ...prev!,
         oportunidades: oportunidades.filter(op => 
           op.cliente === cliente.nome || op.clienteId === cliente.id
         )
-      };
-      
-      setClienteDetalhes(detalhes);
-      setEditedCliente(detalhes);
+      }));
+      setEditedCliente(prev => ({
+        ...prev!,
+        oportunidades: oportunidades.filter(op =>
+          op.cliente === cliente.nome || op.clienteId === cliente.id
+        )
+      }));
     }
-  }, [open, cliente, oportunidades]);
+  }, [cliente, clienteDetalhes?.id, oportunidades]); // Dependência em clienteDetalhes.id para re-filtrar se o ID mudar
 
   // Formatar data para exibição
   const formatDate = (dateString: string) => {
@@ -172,33 +196,78 @@ export function DetalhesCliente({ cliente, open, onOpenChange, onClienteUpdate, 
   }
 
   // Adicionar contato
-  const handleAddContato = () => {
-    if (!editedCliente || !novoContato.nome || !novoContato.email) return
-
-    const id = `contato-${Date.now()}`
-    const contato: Contato = {
-      id,
-      nome: novoContato.nome,
-      cargo: novoContato.cargo || "",
-      email: novoContato.email,
-      telefone: novoContato.telefone || "",
+  const handleAddContato = async () => {
+    if (!clienteDetalhes?.id || !novoContato.nome || !novoContato.email) {
+      toast({ title: "Erro", description: "Nome e Email do contato são obrigatórios.", variant: "destructive" });
+      return;
     }
-
-    const contatos = [...(editedCliente.contatos || []), contato]
-    setEditedCliente({ ...editedCliente, contatos })
-    
-    // Limpar formulário
-    setNovoContato({})
-    setAdicionandoContato(false)
-  }
+    setIsSubmittingContato(true);
+    try {
+      await createContato({
+        clienteId: clienteDetalhes.id,
+        nome: novoContato.nome,
+        cargo: novoContato.cargo || undefined,
+        email: novoContato.email,
+        telefone: novoContato.telefone || undefined,
+        principal: novoContato.principal || false,
+      });
+      toast({ title: "Sucesso", description: "Contato adicionado." });
+      setNovoContato({ nome: '', cargo: '', email: '', telefone: '', principal: false });
+      setAdicionandoContato(false);
+      // fetchContatos(clienteDetalhes.id); // O hook deve atualizar a lista, mas pode forçar se necessário
+    } catch (error) {
+      console.error("Erro ao adicionar contato:", error);
+      toast({ title: "Erro", description: `Não foi possível adicionar o contato: ${error instanceof Error ? error.message : "Erro desconhecido"}`, variant: "destructive" });
+    } finally {
+      setIsSubmittingContato(false);
+    }
+  };
 
   // Remover contato
-  const handleRemoveContato = (id: string) => {
-    if (!editedCliente) return
-    
-    const contatos = editedCliente.contatos?.filter(c => c.id !== id) || []
-    setEditedCliente({ ...editedCliente, contatos })
-  }
+  const handleRemoveContatoClick = (id: string) => {
+    setContatoParaExcluirId(id);
+    setShowConfirmDeleteContatoModal(true);
+  };
+
+  const handleConfirmDeleteContato = async () => {
+    if (!contatoParaExcluirId) return;
+    try {
+      await deleteContato(contatoParaExcluirId);
+      toast({ title: "Sucesso", description: "Contato excluído." });
+      setContatoParaExcluirId(null);
+      setShowConfirmDeleteContatoModal(false);
+    } catch (error) {
+      console.error("Erro ao excluir contato:", error);
+      toast({ title: "Erro", description: `Não foi possível excluir o contato: ${error instanceof Error ? error.message : "Erro desconhecido"}`, variant: "destructive" });
+    }
+  };
+
+  // Editar contato
+  const handleEditContatoClick = (contato: Contato) => {
+    setEditandoContato(contato);
+    setShowEditarContatoModal(true);
+  };
+
+  const handleUpdateContato = async (dadosAtualizados: Partial<Contato>) => {
+    if (!editandoContato || !editandoContato.id) return;
+    setIsSubmittingEditContato(true);
+    try {
+      // Garante que `principal` seja booleano
+      const payload = {
+        ...dadosAtualizados,
+        principal: !!dadosAtualizados.principal,
+      };
+      await updateContato(editandoContato.id, payload);
+      toast({ title: "Sucesso", description: "Contato atualizado." });
+      setShowEditarContatoModal(false);
+      setEditandoContato(null);
+    } catch (error) {
+      console.error("Erro ao atualizar contato:", error);
+      toast({ title: "Erro", description: `Não foi possível atualizar o contato: ${error instanceof Error ? error.message : "Erro desconhecido"}`, variant: "destructive" });
+    } finally {
+      setIsSubmittingEditContato(false);
+    }
+  };
 
   // Toggle para expandir/retrair o painel
   const toggleExpanded = () => {
@@ -363,9 +432,10 @@ export function DetalhesCliente({ cliente, open, onOpenChange, onClienteUpdate, 
                     <Card>
                       <CardContent className="p-4">
                         <h3 className="text-base font-semibold mb-3">Contatos Principais</h3>
-                        {clienteDetalhes.contatos && clienteDetalhes.contatos.length > 0 ? (
+                        {isLoadingContatos ? <p className="text-sm text-muted-foreground">Carregando contatos...</p> :
+                         contatos && contatos.filter(c => c.principal).length > 0 ? (
                           <div className="space-y-3">
-                            {clienteDetalhes.contatos.slice(0, 2).map((contato) => (
+                            {contatos.filter(c => c.principal).slice(0, 2).map((contato) => (
                               <div key={contato.id} className="flex items-start">
                                 <User className="h-4 w-4 mr-2 mt-0.5 text-muted-foreground" />
                                 <div>
@@ -388,7 +458,7 @@ export function DetalhesCliente({ cliente, open, onOpenChange, onClienteUpdate, 
                                 </div>
                               </div>
                             ))}
-                            {clienteDetalhes.contatos.length > 2 && (
+                            {contatos.filter(c => c.principal).length > 2 && (
                               <Button 
                                 variant="ghost" 
                                 size="sm" 
@@ -562,41 +632,101 @@ export function DetalhesCliente({ cliente, open, onOpenChange, onClienteUpdate, 
                 </TabsContent>
 
                 {/* Aba de Contatos */}
-                <TabsContent value="contatos" className="px-6 py-4">
-                  <div className="space-y-3">
-                    {clienteDetalhes.contatos && clienteDetalhes.contatos.length > 0 ? (
-                      <div className="space-y-3">
-                        {clienteDetalhes.contatos.map((contato) => (
-                          <Card key={contato.id}>
-                            <CardContent className="p-4">
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <h4 className="text-base font-medium">{contato.nome}</h4>
-                                  <p className="text-xs text-muted-foreground">{contato.cargo}</p>
-                                </div>
-                                <div className="flex items-center text-xs space-x-2">
-                                  {contato.email && (
-                                    <div className="flex items-center">
-                                      <Mail className="h-3 w-3 mr-1" />
-                                      <span>{contato.email}</span>
-                                    </div>
-                                  )}
-                                  {contato.telefone && (
-                                    <div className="flex items-center">
-                                      <Phone className="h-3 w-3 mr-1" />
-                                      <span>{contato.telefone}</span>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">Nenhum contato cadastrado</p>
-                    )}
+                <TabsContent value="contatos" className="px-6 py-4 space-y-4">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-lg font-semibold">Lista de Contatos</h3>
+                    <Button size="sm" onClick={() => setAdicionandoContato(true)} variant="outline">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Adicionar Contato
+                    </Button>
                   </div>
+
+                  {adicionandoContato && (
+                    <Card className="p-4">
+                      <h4 className="text-md font-medium mb-2">Novo Contato</h4>
+                      <div className="grid grid-cols-2 gap-4 mb-2">
+                        <div>
+                          <Label htmlFor="novo-contato-nome">Nome*</Label>
+                          <Input id="novo-contato-nome" value={novoContato.nome || ''} onChange={e => setNovoContato(prev => ({ ...prev, nome: e.target.value }))} />
+                        </div>
+                        <div>
+                          <Label htmlFor="novo-contato-cargo">Cargo</Label>
+                          <Input id="novo-contato-cargo" value={novoContato.cargo || ''} onChange={e => setNovoContato(prev => ({ ...prev, cargo: e.target.value }))} />
+                        </div>
+                        <div>
+                          <Label htmlFor="novo-contato-email">Email*</Label>
+                          <Input type="email" id="novo-contato-email" value={novoContato.email || ''} onChange={e => setNovoContato(prev => ({ ...prev, email: e.target.value }))} />
+                        </div>
+                        <div>
+                          <Label htmlFor="novo-contato-telefone">Telefone</Label>
+                          <Input id="novo-contato-telefone" value={novoContato.telefone || ''} onChange={e => setNovoContato(prev => ({ ...prev, telefone: e.target.value }))} />
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2 mb-3">
+                        <Checkbox
+                          id="novo-contato-principal"
+                          checked={novoContato.principal}
+                          onCheckedChange={checked => setNovoContato(prev => ({ ...prev, principal: !!checked }))} />
+                        <Label htmlFor="novo-contato-principal" className="font-normal">Contato Principal</Label>
+                      </div>
+                      <div className="flex justify-end space-x-2">
+                        <Button variant="ghost" size="sm" onClick={() => { setAdicionandoContato(false); setNovoContato({ nome: '', cargo: '', email: '', telefone: '', principal: false }); }}>Cancelar</Button>
+                        <Button size="sm" onClick={handleAddContato} disabled={isSubmittingContato}>
+                          {isSubmittingContato ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Save className="h-4 w-4 mr-1" />}
+                          Salvar Contato
+                        </Button>
+                      </div>
+                    </Card>
+                  )}
+
+                  {isLoadingContatos && (
+                     <div className="flex items-center justify-center py-6">
+                      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                      <p className="ml-2 text-muted-foreground">Carregando contatos...</p>
+                    </div>
+                  )}
+                  {errorContatos && <p className="text-red-500 text-sm">Erro ao carregar contatos: {errorContatos}</p>}
+
+                  {!isLoadingContatos && !errorContatos && contatos.length > 0 ? (
+                    <div className="space-y-3">
+                      {contatos.map((contato) => (
+                        <Card key={contato.id}>
+                          <CardContent className="p-4">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <h4 className="text-base font-medium">{contato.nome} {contato.principal && <Badge variant="outline" className="ml-2 border-green-500 text-green-700">Principal</Badge>}</h4>
+                                <p className="text-xs text-muted-foreground">{contato.cargo}</p>
+                              </div>
+                              <div className="flex space-x-2">
+                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleEditContatoClick(contato)}>
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRemoveContatoClick(contato.id)}>
+                                  <Trash2 className="h-4 w-4 text-red-500" />
+                                </Button>
+                              </div>
+                            </div>
+                            <div className="flex items-center text-xs space-x-4 mt-2">
+                              {contato.email && (
+                                <div className="flex items-center">
+                                  <Mail className="h-3 w-3 mr-1 text-muted-foreground" />
+                                  <a href={`mailto:${contato.email}`} className="hover:underline">{contato.email}</a>
+                                </div>
+                              )}
+                              {contato.telefone && (
+                                <div className="flex items-center">
+                                  <Phone className="h-3 w-3 mr-1 text-muted-foreground" />
+                                  <span>{contato.telefone}</span>
+                                </div>
+                              )}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  ) : (
+                    !isLoadingContatos && !errorContatos && <p className="text-sm text-muted-foreground text-center py-4">Nenhum contato cadastrado para este cliente.</p>
+                  )}
                 </TabsContent>
 
                 {/* Aba de Oportunidades */}
@@ -680,6 +810,84 @@ export function DetalhesCliente({ cliente, open, onOpenChange, onClienteUpdate, 
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Diálogo de confirmação de exclusão de CONTATO */}
+      <AlertDialog open={showConfirmDeleteContatoModal} onOpenChange={setShowConfirmDeleteContatoModal}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar Exclusão</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tem certeza que deseja excluir este contato? Esta ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setContatoParaExcluirId(null)}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmDeleteContato}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Excluir Contato
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Modal/Dialog para Editar Contato */}
+      {showEditarContatoModal && editandoContato && (
+        <Dialog open={showEditarContatoModal} onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            setEditandoContato(null);
+          }
+          setShowEditarContatoModal(isOpen);
+        }}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle>Editar Contato</DialogTitle>
+              <DialogDescription>Modifique os dados do contato abaixo.</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="edit-contato-nome" className="text-right">Nome*</Label>
+                <Input id="edit-contato-nome" value={editandoContato.nome || ''} onChange={e => setEditandoContato(prev => prev ? { ...prev, nome: e.target.value } : null)} className="col-span-3" />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="edit-contato-cargo" className="text-right">Cargo</Label>
+                <Input id="edit-contato-cargo" value={editandoContato.cargo || ''} onChange={e => setEditandoContato(prev => prev ? { ...prev, cargo: e.target.value } : null)} className="col-span-3" />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="edit-contato-email" className="text-right">Email*</Label>
+                <Input type="email" id="edit-contato-email" value={editandoContato.email || ''} onChange={e => setEditandoContato(prev => prev ? { ...prev, email: e.target.value } : null)} className="col-span-3" />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="edit-contato-telefone" className="text-right">Telefone</Label>
+                <Input id="edit-contato-telefone" value={editandoContato.telefone || ''} onChange={e => setEditandoContato(prev => prev ? { ...prev, telefone: e.target.value } : null)} className="col-span-3" />
+              </div>
+              <div className="flex items-center space-x-2 col-start-2 col-span-3">
+                <Checkbox
+                  id="edit-contato-principal"
+                  checked={editandoContato.principal}
+                  onCheckedChange={checked => setEditandoContato(prev => prev ? { ...prev, principal: !!checked } : null)} />
+                <Label htmlFor="edit-contato-principal" className="font-normal">Contato Principal</Label>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setShowEditarContatoModal(false); setEditandoContato(null); }}>Cancelar</Button>
+              <Button
+                onClick={() => {
+                  if (editandoContato) {
+                    const { id, clienteId, createdAt, updatedAt, ...dadosParaAtualizar } = editandoContato;
+                    handleUpdateContato(dadosParaAtualizar);
+                  }
+                }}
+                disabled={isSubmittingEditContato}
+              >
+                {isSubmittingEditContato ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Save className="h-4 w-4 mr-1" />}
+                Salvar Alterações
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </>
   )
 }

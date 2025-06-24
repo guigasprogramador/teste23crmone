@@ -156,7 +156,9 @@ export function NovaOportunidade({ onOportunidadeAdded }: NovaOportunidadeProps)
       formDataUpload.append('nome', arquivo.name);
       formDataUpload.append('tipo', 'Anexo Oportunidade');
       formDataUpload.append('tags', 'comercial');
-      // Not appending 'oportunidadeId' to this specific document upload as per earlier decision.
+      if (oportunidadeId) {
+        formDataUpload.append('oportunidadeId', oportunidadeId);
+      }
       // If direct linking is desired, the backend /api/documentos/doc/upload and 'documentos' table
       // would need to support an 'oportunidade_id' or a generic 'parent_entity_id'.
 

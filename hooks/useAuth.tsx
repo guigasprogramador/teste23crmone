@@ -4,7 +4,6 @@
 
 import React, { createContext, useState, useContext, useEffect, ReactNode } from "react";
 import { toast } from "sonner";
-// import { supabase, crmonefactory } from "@/lib/supabase/client"; // Supabase client removed
 import { useRouter } from "next/navigation";
 
 // Definir interface para o usuário
@@ -23,9 +22,9 @@ interface AuthContextType {
   loading: boolean;
   register: (name: string, email: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
-  // loginWithMicrosoft: () => Promise<void>; // Microsoft login removed
   logout: () => Promise<void>;
   refreshToken: () => Promise<void>;
+  hasPermission: (requiredRoles: string[] | string) => boolean;
 }
 
 // Criar contexto de autenticação
@@ -96,13 +95,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       }
 
       const data = await response.json();
-      if (!data.user || !data.accessToken) {
+      if (!data.user) {
         throw new Error("Resposta inválida do servidor");
       }
 
       setUser(data.user);
       setIsAuthenticated(true);
-      // localStorage.setItem('accessToken', data.accessToken); // REMOVED
     } catch (error) {
       console.error("Erro ao renovar token:", error);
       setUser(null);
@@ -177,30 +175,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
-  // Login com Microsoft - REMOVED / COMMENTED OUT
-  // const loginWithMicrosoft = async (): Promise<void> => {
-  //   try {
-  //     // const { data, error } = await supabase.auth.signInWithOAuth({ // Supabase call
-  //     //   provider: 'azure',
-  //     //   options: {
-  //     //     scopes: 'email profile openid',
-  //     //     redirectTo: `${window.location.origin}/auth/callback`
-  //     //   }
-  //     // });
-
-  //     // if (error) throw error;
-      
-  //     // if (data.url) {
-  //     //   window.location.href = data.url;
-  //     // }
-  //     console.warn("Login com Microsoft não está mais disponível após a refatoração.");
-  //     toast.info("Login com Microsoft não está mais disponível.");
-  //   } catch (error) {
-  //     console.error("Erro durante login com Microsoft:", error);
-  //     toast.error("Erro durante login com Microsoft: " + (error instanceof Error ? error.message : String(error)));
-  //   }
-  // };
-
   // Logout
   const logout = async (): Promise<void> => {
     try {
@@ -220,15 +194,27 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       document.cookie = "accessToken=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
       document.cookie = "refreshToken=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
       
-      // Força um redirecionamento completo para a página de login
-      window.location.href = 'http://127.0.0.1:59495/auth/login';
+      // Redireciona para a página de login usando o router
+      router.push("/auth/login");
       
       toast.success("Logout realizado com sucesso!");
     } catch (error) {
       console.error("Erro durante o logout:", error);
       // Força um redirecionamento mesmo em caso de erro
-      window.location.href = 'http://127.0.0.1:59495/auth/login';
+      router.push("/auth/login");
     }
+  };
+
+  // Função para verificar permissões
+  const hasPermission = (requiredRoles: string[] | string): boolean => {
+    if (!user || !user.role) {
+      return false;
+    }
+
+    if (Array.isArray(requiredRoles)) {
+      return requiredRoles.includes(user.role);
+    }
+    return user.role === requiredRoles;
   };
 
   // Criando o objeto de contexto com todos os valores e funções
@@ -238,9 +224,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     loading,
     register,
     login,
-    // loginWithMicrosoft, // Microsoft login removed
     logout,
-    refreshToken
+    refreshToken,
+    hasPermission
   };
   
   // Retornando o Provider com o value contendo o objeto de contexto
