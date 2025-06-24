@@ -427,6 +427,63 @@ export function useLicitacoesOtimizado() {
     }
   }, [auth, carregarDadosIniciais]);
 
+  const atualizarStatusLicitacao = useCallback(async (id: string, status: string): Promise<Licitacao | null> => {
+    setIsLoading(true); // Pode ser um isLoadingStatusUpdate específico
+    setError(null);
+    const { refreshToken, logout } = auth;
+
+    const makeRequest = async (payload: { status: string }) => {
+      const response = await fetch(`/api/licitacoes/${id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        if (response.status === 401) throw { status: 401, data: await response.json().catch(() => ({error: `Unauthorized: ${response.statusText}`})) };
+        const errorData = await response.json().catch(() => ({ error: `API Error: ${response.status} ${response.statusText}` }));
+        throw new Error(errorData.error || `Erro ao atualizar status da licitação: ${response.status}`);
+      }
+      return response.json();
+    };
+
+    try {
+      const data = await makeRequest({ status });
+      // Atualizar o estado local otimisticamente ou com os dados retornados
+      setLicitacoes((prev) => prev.map(l => l.id === id ? data : l));
+      setFilteredLicitacoes((prev) => prev.map(l => l.id === id ? data : l)); // Também o filtrado
+      if (typeof carregarEstatisticas === 'function') { // Assegurar que carregarEstatisticas existe
+          await carregarEstatisticas(); // Recarregar estatísticas
+      }
+      return data;
+    } catch (err: any) {
+      if (err && err.status === 401) {
+        console.log("useLicitacoesOtimizado: 401 detected, attempting refresh for atualizarStatusLicitacao");
+        try {
+          await refreshToken();
+          const data = await makeRequest({ status }); // Retry
+          setLicitacoes((prev) => prev.map(l => l.id === id ? data : l));
+          setFilteredLicitacoes((prev) => prev.map(l => l.id === id ? data : l));
+           if (typeof carregarEstatisticas === 'function') {
+              await carregarEstatisticas();
+          }
+          return data;
+        } catch (refreshError: any) {
+          console.error("useLicitacoesOtimizado: Token refresh failed for atualizarStatusLicitacao", refreshError);
+          logout();
+          setError("Sessão expirada. Por favor, faça login novamente.");
+          return null;
+        }
+      } else {
+        console.error('Erro ao atualizar status da licitação:', err);
+        setError(err.message || "Erro desconhecido.");
+        return null;
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [auth, carregarEstatisticas]);
+
   return {
     licitacoes,
     filteredLicitacoes,
@@ -439,6 +496,7 @@ export function useLicitacoesOtimizado() {
     carregarDadosIniciais,
     adicionarLicitacao,
     atualizarLicitacao,
-    excluirLicitacao
+    excluirLicitacao,
+    atualizarStatusLicitacao
   };
 }

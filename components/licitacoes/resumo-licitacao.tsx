@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Edit, Save, Plus, Trash2, FileText } from "lucide-react"
+import { Edit, Save, Plus, Trash2, FileText, Loader2 } from "lucide-react" // Adicionado Loader2
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 
@@ -30,6 +30,7 @@ export function ResumoLicitacao({ licitacaoId, isEditing }: ResumoLicitacaoProps
   const [novoPonto, setNovoPonto] = useState("")
   const [pontosImportantes, setPontosImportantes] = useState<string[]>([])
   const [editado, setEditado] = useState(false)
+  const [isSaving, setIsSaving] = useState(false); // Estado para salvar
 
   // Carregar resumo
   useEffect(() => {
@@ -70,11 +71,10 @@ export function ResumoLicitacao({ licitacaoId, isEditing }: ResumoLicitacaoProps
 
   // Salvar resumo
   const salvarResumo = async () => {
+    setIsSaving(true); // Inicia o salvamento
     try {
-      const method = resumo ? "PUT" : "POST"
-      const url = resumo 
-        ? `/api/licitacoes/${licitacaoId}/resumo/${resumo.id}` 
-        : `/api/licitacoes/${licitacaoId}/resumo`
+      const method = "PUT"; // API PUT faz upsert
+      const url = `/api/licitacoes/${licitacaoId}/resumo`;
 
       const response = await fetch(url, {
         method,
@@ -99,6 +99,8 @@ export function ResumoLicitacao({ licitacaoId, isEditing }: ResumoLicitacaoProps
     } catch (error) {
       console.error("Erro ao salvar resumo:", error)
       toast.error("Erro ao salvar resumo")
+    } finally {
+      setIsSaving(false); // Finaliza o salvamento
     }
   }
 
@@ -155,9 +157,13 @@ export function ResumoLicitacao({ licitacaoId, isEditing }: ResumoLicitacaoProps
 
               {isEditing && editado && (
                 <div className="flex justify-end">
-                  <Button onClick={salvarResumo} className="gap-2">
-                    <Save className="w-4 h-4" />
-                    Salvar Resumo
+                  <Button onClick={salvarResumo} className="gap-2" disabled={isSaving}>
+                    {isSaving ? (
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    ) : (
+                      <Save className="w-4 h-4" />
+                    )}
+                    {isSaving ? "Salvando..." : "Salvar Resumo"}
                   </Button>
                 </div>
               )}

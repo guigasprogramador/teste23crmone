@@ -77,8 +77,9 @@ interface DetalhesLicitacaoProps {
   onOpenChange: (open: boolean) => void
   onUpdateStatus?: (id: string, status: string) => void
   onOrgaoClick?: (orgaoNome: string) => void
-  onLicitacaoUpdate?: (licitacao: Licitacao) => void
+  onLicitacaoUpdate?: (licitacao: Licitacao) => void // Para atualizações gerais da licitação
   onLicitacaoDelete?: (licitacao: Licitacao) => void
+  onLicitacaoNeedsRefresh?: () => void; // Para quando subcomponentes (ex: serviços) atualizam dados que afetam a licitação
 }
 
 const statusColors: Record<string, string> = {
@@ -119,6 +120,7 @@ export function DetalhesLicitacao({
   onOrgaoClick,
   onLicitacaoUpdate,
   onLicitacaoDelete,
+  onLicitacaoNeedsRefresh,
 }: DetalhesLicitacaoProps) {
   const [activeTab, setActiveTab] = useState("resumo")
   const [isEditing, setIsEditing] = useState(false)
@@ -219,7 +221,7 @@ export function DetalhesLicitacao({
       formData.append('tipo', tipoDocumento || 'Documento')
       
       // Fazer upload do arquivo - sem necessidade de token
-      const response = await fetch('/api/documentos/upload', {
+      const response = await fetch('/api/documentos/doc/upload', {
         method: 'POST',
         headers: {
           // Enviamos apenas o header de autorização como Bearer sem token
@@ -618,7 +620,15 @@ export function DetalhesLicitacao({
 
           <TabsContent value="servicos">
             {/* Componente de serviços da licitação */}
-            <ServicosLicitacao licitacaoId={licitacao.id} isEditing={isEditing} />
+            <ServicosLicitacao
+              licitacaoId={licitacao.id}
+              isEditing={isEditing}
+              onServicosUpdated={() => {
+                if (onLicitacaoNeedsRefresh) {
+                  onLicitacaoNeedsRefresh();
+                }
+              }}
+            />
           </TabsContent>
 
           <TabsContent value="documentos">

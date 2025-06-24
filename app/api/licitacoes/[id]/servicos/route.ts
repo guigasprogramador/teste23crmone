@@ -47,41 +47,81 @@ export async function POST(
     const data = await request.json();
     console.log("Dados recebidos para novo serviço:", data);
     
-    if (!data.nome) {
-      return NextResponse.json({ error: 'Nome do serviço é obrigatório' }, { status: 400 });
+    if (!data.nome || data.valor === undefined || data.quantidade === undefined) { // Valor e Quantidade agora são obrigatórios
+      return NextResponse.json({ error: 'Nome, valor unitário e quantidade do serviço são obrigatórios' }, { status: 400 });
+    }
+
+    const valorUnitario = parseFloat(data.valor);
+    const quantidade = parseInt(data.quantidade, 10);
+
+    if (isNaN(valorUnitario) || isNaN(quantidade) || valorUnitario < 0 || quantidade <= 0) {
+      return NextResponse.json({ error: 'Valor unitário e quantidade devem ser números válidos e positivos (quantidade > 0).' }, { status: 400 });
     }
     
+    // Assumindo que 'valor' na tabela licitacao_servicos armazenará o valor TOTAL do item/serviço
+    const valorTotalItem = valorUnitario * quantidade;
+
     const newServicoId = uuidv4();
     const servicoDb = {
       id: newServicoId,
       licitacao_id: licitacaoId,
       nome: data.nome,
       descricao: data.descricao || null,
-      valor: data.valor !== undefined ? Number(data.valor) : 0.00,
+      valor: valorTotalItem, // Armazenar o valor total do item
       unidade: data.unidade || 'unidade',
-      quantidade: data.quantidade !== undefined ? Number(data.quantidade) : 1,
-      // created_at e updated_at serão definidos por NOW() no SQL
+      quantidade: quantidade,
     };
     
     connection = await getDbConnection();
+    await connection.beginTransaction(); // Iniciar transação
+
     const sqlInsert = 'INSERT INTO licitacao_servicos (id, licitacao_id, nome, descricao, valor, unidade, quantidade, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
-    await connection.execute(sqlInsert, Object.values(servicoDb));
+    await connection.execute(sqlInsert, [
+      servicoDb.id,
+      servicoDb.licitacao_id,
+      servicoDb.nome,
+      servicoDb.descricao,
+      servicoDb.valor, // Valor total do item
+      servicoDb.unidade,
+      servicoDb.quantidade
+    ]);
     
     console.log("Novo serviço criado com ID:", newServicoId, "para licitação ID:", licitacaoId);
 
-    // Para retornar o objeto completo incluindo timestamps gerados pelo DB:
+    // Atualizar valor_estimado na licitação
+    const updateLicitacaoSql = `
+      UPDATE licitacoes
+      SET valor_estimado = (
+          SELECT COALESCE(SUM(valor), 0)
+          FROM licitacao_servicos
+          WHERE licitacao_id = ?
+      )
+      WHERE id = ?;
+    `;
+    await connection.execute(updateLicitacaoSql, [licitacaoId, licitacaoId]);
+    console.log("Valor estimado da licitação atualizado.");
+
+    await connection.commit(); // Commit da transação
+
     const [createdRows]: any = await connection.execute('SELECT * FROM licitacao_servicos WHERE id = ?', [newServicoId]);
     if (createdRows.length === 0) {
-        return NextResponse.json({ error: "Falha ao recuperar serviço recém-criado" }, { status: 500 });
+        // Isso não deveria acontecer se a inserção e o commit foram bem-sucedidos
+        return NextResponse.json({ error: "Falha ao recuperar serviço recém-criado após commit" }, { status: 500 });
     }
     
     return NextResponse.json(createdRows[0], { status: 201 });
 
   } catch (error: any) {
+    if (connection) await connection.rollback(); // Rollback em caso de erro
     console.error('Erro ao adicionar serviço (MySQL):', error);
+    if (error.code === 'ER_NO_REFERENCED_ROW_2') {
+        return NextResponse.json({ error: 'ID da licitação fornecido não existe.' }, { status: 400 });
+    }
     return NextResponse.json(
-      { error: 'Erro interno ao adicionar serviço' },
+      { error: 'Erro interno ao adicionar serviço', details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (connection) await connection.release();
   }
 }
