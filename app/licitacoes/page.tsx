@@ -63,7 +63,8 @@ export default function LicitacoesPage() {
     carregarDadosIniciais,
     adicionarLicitacao,
     atualizarLicitacao,
-    excluirLicitacao
+    excluirLicitacao,
+    atualizarStatusLicitacao // Adicionar a nova função aqui
   } = useLicitacoesOtimizado();
   
   const [selectedLicitacao, setSelectedLicitacao] = useState<Licitacao | null>(null)
@@ -74,6 +75,8 @@ export default function LicitacoesPage() {
   const [excluirLicitacaoId, setExcluirLicitacaoId] = useState<string | null>(null)
   const [dialogExcluirAberto, setDialogExcluirAberto] = useState(false)
   const [filtros, setFiltros] = useState<LicitacaoFiltros>({})
+  const [loadingSelectedLicitacao, setLoadingSelectedLicitacao] = useState(false);
+
 
   // Extrair listas de valores únicos para os filtros - usando useMemo para evitar recalcular a cada renderização
   const orgaos = useMemo(() => filteredLicitacoes.map(item => item.orgao), [filteredLicitacoes])
@@ -258,56 +261,29 @@ export default function LicitacoesPage() {
 
   // Atualizar status de uma licitação
   const handleUpdateStatus = async (id: string, newStatus: string) => {
-    const licitacao = licitacoes.find(l => l.id === id)
-    if (!licitacao) return
-    
     try {
-      // Obter token de autenticação
-      const accessToken = localStorage.getItem('accessToken');
-      
-      if (!accessToken) {
-        console.error('Token de autenticação não encontrado');
+      console.log(`Atualizando status da licitação ${id} para ${newStatus} usando o hook.`);
+      const licitacaoAtualizada = await atualizarStatusLicitacao(id, newStatus);
+
+      if (licitacaoAtualizada) {
+        // O hook já atualiza os estados licitacoes e filteredLicitacoes
+        // e também recarrega as estatísticas.
+        // Apenas precisamos atualizar selectedLicitacao se ela for a que mudou.
+        if (selectedLicitacao && selectedLicitacao.id === id) {
+          setSelectedLicitacao(prev => (prev ? { ...prev, status: newStatus } : null));
+        }
         toast({
-          title: "Erro de autenticação",
-          description: "Você precisa estar autenticado para realizar esta ação.",
-          variant: "destructive"
+          title: "Status atualizado",
+          description: "O status da licitação foi atualizado com sucesso.",
         });
-        return;
+      } else {
+        // Se a função do hook retornar null, um erro já foi tratado e logado pelo hook
+        // Um toast de erro já deve ter sido exibido pelo hook ou a sessão expirou
       }
-      
-      console.log(`Atualizando status da licitação ${id} para ${newStatus}`);
-      
-      const response = await fetch(`/api/licitacoes/${id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`,
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        },
-        body: JSON.stringify({ status: newStatus }),
-      })
-      
-      // Verificar resposta detalhada em caso de erro
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`Erro na resposta da API: ${response.status} - ${errorText}`);
-        throw new Error(`Erro ao atualizar status da licitação: ${response.status} ${errorText}`)
-      }
-      
-      // Atualizar localmente para feedback imediato ao usuário
-      setLicitacoes(prevLicitacoes =>
-        prevLicitacoes.map(lic => (lic.id === id ? { ...lic, status: newStatus } : lic))
-      )
-      
-      setFilteredLicitacoes(prevFiltered =>
-        prevFiltered.map(lic => (lic.id === id ? { ...lic, status: newStatus } : lic))
-      )
-      
-      if (selectedLicitacao && selectedLicitacao.id === id) {
-        setSelectedLicitacao(prev => (prev ? { ...prev, status: newStatus } : null))
-      }
-      
+    } catch (error) {
+      // Este catch é para erros inesperados não tratados pelo hook,
+      // ou se o hook relançar o erro.
+      console.error('Erro ao chamar atualizarStatusLicitacao na página:', error);
       toast({
         title: "Status atualizado",
         description: "O status da licitação foi atualizado com sucesso.",
@@ -451,6 +427,48 @@ export default function LicitacoesPage() {
     setSelectedOrgao(orgao)
     setOrgaoDetailsOpen(true)
   }
+
+  const refetchLicitacaoSelecionada = useCallback(async () => {
+    if (selectedLicitacao?.id) {
+      setLoadingSelectedLicitacao(true); // Ativa o loading específico para o detalhe
+      console.log(`[Page] Refetching licitacao: ${selectedLicitacao.id}`);
+      try {
+        // Idealmente, o hook useLicitacoesOtimizado teria uma função para buscar e atualizar uma única licitação no estado.
+        // Como alternativa, recarregamos tudo e depois atualizamos a selecionada.
+        await carregarDadosIniciais(); // Recarrega todas as licitações e estatísticas
+
+        // Após carregarDadosIniciais, o estado 'licitacoes' no hook é atualizado.
+        // Precisamos esperar que essa atualização se propague para esta página
+        // e então encontrar a licitação atualizada na nova lista.
+        // Isso pode ser um pouco complicado devido à natureza assíncrona.
+        // Uma abordagem mais direta seria se o hook retornasse a lista atualizada.
+        // Por agora, vamos confiar que o `useEffect` que observa `licitacoes` no hook vai atualizar `filteredLicitacoes`.
+        // E que `selectedLicitacao` será atualizado se o objeto mudar na lista.
+        // Para forçar uma atualização do objeto selectedLicitacao, podemos fazer:
+        // const licitacaoAtualizada = licitacoes.find(l => l.id === selectedLicitacao.id); // 'licitacoes' pode não estar atualizada aqui ainda
+        // setSelectedLicitacao(licitacaoAtualizada || null);
+        // A melhor forma é o hook expor um getById ou a lista ser sempre a referência.
+        // Para este subtask, a chamada a carregarDadosIniciais é o principal.
+        // O componente DetalhesLicitacao vai re-renderizar porque sua prop 'licitacao' (que é selectedLicitacao)
+        // será um novo objeto se carregarDadosIniciais atualizar a lista 'licitacoes' de onde 'filteredLicitacoes' deriva.
+        // Se 'selectedLicitacao' for o mesmo objeto (mutado), não haverá re-renderização.
+        // O hook `useLicitacoesOtimizado` já faz `setLicitacoes` com novos objetos.
+        // A questão é se `selectedLicitacao` é uma cópia ou referência.
+        // `handleLicitacaoClick` faz `setSelectedLicitacao(licitacao)`, que é uma referência.
+        // Então, se o objeto na lista `licitacoes` (e consequentemente `filteredLicitacoes`) for atualizado,
+        // `selectedLicitacao` também refletirá essa mudança.
+        // No entanto, para garantir que o valor seja atualizado no header do DetalhesLicitacao,
+        // é importante que a prop `oportunidade.valor` (que é `selectedLicitacao.valor`) seja atualizada.
+        // O hook já atualiza a lista, então o `selectedLicitacao` deve refletir o novo valor.
+
+      } catch (error) {
+        toast({ title: "Erro", description: "Falha ao recarregar dados da licitação.", variant: "destructive" });
+      } finally {
+        setLoadingSelectedLicitacao(false);
+      }
+    }
+  }, [selectedLicitacao, carregarDadosIniciais]);
+
 
   return (
     <div className="p-4 sm:p-6 md:p-8 overflow-hidden">
@@ -733,8 +751,9 @@ export default function LicitacoesPage() {
           }}
           onUpdateStatus={handleUpdateStatus}
           onOrgaoClick={handleOrgaoClick}
-          onLicitacaoUpdate={handleLicitacaoUpdate}
+          onLicitacaoUpdate={handleLicitacaoUpdate} // Usado para salvar edições gerais da licitação
           onLicitacaoDelete={handleDeleteLicitacao}
+          onLicitacaoNeedsRefresh={refetchLicitacaoSelecionada} // Nova prop
         />
       ) : null}
 
