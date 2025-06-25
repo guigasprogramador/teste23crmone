@@ -62,9 +62,9 @@ function formatEtapaForFrontend(etapa: EtapaFromDB): EtapaFrontend {
 // GET - Listar todas as etapas de uma licitação
 export async function GET(
   request: NextRequest,
-  { params }: { params: { licitacaoId: string } }
+  { params }: { params: { id: string } } // Alterado para id
 ) {
-  const { licitacaoId } = params;
+  const { id: licitacaoId } = params; // Renomeado id para licitacaoId
   if (!licitacaoId) {
     return NextResponse.json({ error: 'ID da Licitação é obrigatório' }, { status: 400 });
   }
@@ -94,9 +94,9 @@ export async function GET(
 // POST - Adicionar uma nova etapa a uma licitação
 export async function POST(
   request: NextRequest,
-  { params }: { params: { licitacaoId: string } }
+  { params }: { params: { id: string } } // Alterado para id
 ) {
-  const { licitacaoId } = params;
+  const { id: licitacaoId } = params; // Renomeado id para licitacaoId
   if (!licitacaoId) {
     return NextResponse.json({ error: 'ID da Licitação é obrigatório na URL' }, { status: 400 });
   }
