@@ -65,9 +65,9 @@ function formatEtapaForFrontend(etapa: EtapaFromDB): EtapaFrontend {
 // GET - Obter uma etapa específica (opcional, mas bom para consistência)
 export async function GET(
   request: NextRequest,
-  { params }: { params: { licitacaoId: string; etapaId: string } }
+  { params }: { params: { id: string; etapaId: string } } // Alterado licitacaoId para id
 ) {
-  const { licitacaoId, etapaId } = params;
+  const { id: licitacaoId, etapaId } = params; // Renomeado id para licitacaoId
   if (!licitacaoId || !etapaId) {
     return NextResponse.json({ error: 'ID da Licitação e ID da Etapa são obrigatórios' }, { status: 400 });
   }
@@ -99,9 +99,9 @@ export async function GET(
 // PUT - Atualizar uma etapa específica
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { licitacaoId: string; etapaId: string } }
+  { params }: { params: { id: string; etapaId: string } } // Alterado licitacaoId para id
 ) {
-  const { licitacaoId, etapaId } = params;
+  const { id: licitacaoId, etapaId } = params; // Renomeado id para licitacaoId
   if (!licitacaoId || !etapaId) {
     return NextResponse.json({ error: 'ID da Licitação e ID da Etapa são obrigatórios' }, { status: 400 });
   }
@@ -187,9 +187,9 @@ export async function PUT(
 // DELETE - Excluir uma etapa específica
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { licitacaoId: string; etapaId: string } }
+  { params }: { params: { id: string; etapaId: string } } // Alterado licitacaoId para id
 ) {
-  const { licitacaoId, etapaId } = params;
+  const { id: licitacaoId, etapaId } = params; // Renomeado id para licitacaoId
   if (!licitacaoId || !etapaId) {
     return NextResponse.json({ error: 'ID da Licitação e ID da Etapa são obrigatórios' }, { status: 400 });
   }
