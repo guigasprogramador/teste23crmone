@@ -39,9 +39,9 @@ function formatContatoForFrontend(contato: OrgaoContatoFromDB): OrgaoContatoFron
 // GET - Obter um contato específico de um órgão
 export async function GET(
   request: NextRequest,
-  { params }: { params: { orgaoId: string; contatoId: string } }
+  { params }: { params: { id: string; contatoId: string } } // Alterado orgaoId para id
 ) {
-  const { orgaoId, contatoId } = params;
+  const { id: orgaoId, contatoId } = params; // Renomeado id para orgaoId
   if (!orgaoId || !contatoId) {
     return NextResponse.json({ error: 'ID do Órgão e ID do Contato são obrigatórios' }, { status: 400 });
   }
@@ -67,9 +67,9 @@ export async function GET(
 // PUT - Atualizar um contato específico de um órgão
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { orgaoId: string; contatoId: string } }
+  { params }: { params: { id: string; contatoId: string } } // Alterado orgaoId para id
 ) {
-  const { orgaoId, contatoId } = params;
+  const { id: orgaoId, contatoId } = params; // Renomeado id para orgaoId
   if (!orgaoId || !contatoId) {
     return NextResponse.json({ error: 'ID do Órgão e ID do Contato são obrigatórios' }, { status: 400 });
   }
@@ -116,9 +116,9 @@ export async function PUT(
 // DELETE - Excluir um contato específico de um órgão
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { orgaoId: string; contatoId: string } }
+  { params }: { params: { id: string; contatoId: string } } // Alterado orgaoId para id
 ) {
-  const { orgaoId, contatoId } = params;
+  const { id: orgaoId, contatoId } = params; // Renomeado id para orgaoId
   if (!orgaoId || !contatoId) {
     return NextResponse.json({ error: 'ID do Órgão e ID do Contato são obrigatórios' }, { status: 400 });
   }

@@ -43,9 +43,9 @@ function formatContatoForFrontend(contato: OrgaoContatoFromDB): OrgaoContatoFron
 // GET - Listar todos os contatos de um órgão
 export async function GET(
   request: NextRequest,
-  { params }: { params: { orgaoId: string } }
+  { params }: { params: { id: string } } // Alterado para id
 ) {
-  const { orgaoId } = params;
+  const { id: orgaoId } = params; // Renomeado id para orgaoId
   if (!orgaoId) {
     return NextResponse.json({ error: 'ID do Órgão é obrigatório' }, { status: 400 });
   }
@@ -68,9 +68,9 @@ export async function GET(
 // POST - Adicionar um novo contato a um órgão
 export async function POST(
   request: NextRequest,
-  { params }: { params: { orgaoId: string } }
+  { params }: { params: { id: string } } // Alterado para id
 ) {
-  const { orgaoId } = params;
+  const { id: orgaoId } = params; // Renomeado id para orgaoId
   if (!orgaoId) {
     return NextResponse.json({ error: 'ID do Órgão é obrigatório na URL' }, { status: 400 });
   }
